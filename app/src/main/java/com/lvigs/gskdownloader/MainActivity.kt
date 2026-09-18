@@ -369,6 +369,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Preview dekhte time screen off na ho (1-min timeout fix, YouTube jaisa)
+        try { window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } catch (_: Exception) {}
+
         // Notification channel + Android 13+ permission (notification bar progress ke liye)
         DownloadNotifier.ensureChannel(this)
         askNotificationPermission()

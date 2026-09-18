@@ -1,20 +1,27 @@
 package com.lvigs.gskdownloader
 
 import android.app.PictureInPictureParams
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.util.Rational
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -27,10 +34,14 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * Watch screen (v2.1, YouTube jaisa): search + history + ad-free play +
@@ -71,6 +82,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var cancelDlBtn: Button
     private lateinit var speedBtn: Button
     private lateinit var fsBtn: Button
+    private lateinit var zoomBtn: Button
 
     private var exo: ExoPlayer? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -103,6 +115,30 @@ class PlayerActivity : AppCompatActivity() {
     private var isFullscreen: Boolean = false
     private var isInPip: Boolean = false
 
+    // YouTube-style zoom: Fit (poora dikhe) -> Crop (bhar ke dikhe) -> Stretch
+    private val zoomModes = intArrayOf(
+        AspectRatioFrameLayout.RESIZE_MODE_FIT,
+        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+        AspectRatioFrameLayout.RESIZE_MODE_FILL,
+    )
+    private val zoomLabels = arrayOf("🔍 Fit", "🔍 Crop", "🔍 Stretch")
+    private var zoomIdx: Int = 0
+    private var pinchScale: Float = 1f
+    private var scaleDetector: ScaleGestureDetector? = null
+
+    // search/related thumbnails: chhota HTTP client + memory cache
+    private val thumbHttp: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .build()
+    }
+    private val thumbCache = object : LinkedHashMap<String, android.graphics.Bitmap>(64, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, android.graphics.Bitmap>?
+        ): Boolean = size > 60
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_player)
@@ -126,6 +162,20 @@ class PlayerActivity : AppCompatActivity() {
         cancelDlBtn = findViewById(R.id.playerCancelDl)
         speedBtn = findViewById(R.id.playerSpeedBtn)
         fsBtn = findViewById(R.id.playerFsBtn)
+        zoomBtn = findViewById(R.id.playerZoomBtn)
+
+        // FIX: 1 min baad screen off — video dekhte time screen ON rakho
+        // (YouTube jaisa). PARTIAL_WAKE_LOCK sirf background-audio ke liye
+        // tha; screen ke liye ye flag chahiye. Back par onDestroy me hatt jayega.
+        try { window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } catch (_: Exception) {}
+
+        // YouTube jaisa zoom: button se Fit/Crop/Stretch + 2-ungli pinch zoom
+        try {
+            playerView.resizeMode = zoomModes[zoomIdx]
+            zoomBtn.text = zoomLabels[zoomIdx]
+        } catch (_: Exception) {}
+        zoomBtn.setOnClickListener { cycleZoom() }
+        setupPinchZoom()
 
         findViewById<Button>(R.id.playerBackBtn).setOnClickListener { finish() }
         goBtn.setOnClickListener { playFromInput() }
@@ -345,31 +395,148 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    /** Thumbnail-less rich row: title + channel • views • duration. */
+    /** YouTube-jaisi row: thumbnail + title + channel • views • duration.
+     *  Tap = turant ad-free play, long-press = Copy link / Download / Share. */
     private fun addVideoRow(
         parent: LinearLayout, item: VideoItem, marker: String,
         highlight: Boolean, onTap: () -> Unit,
     ) {
         val box = LinearLayout(this)
-        box.orientation = LinearLayout.VERTICAL
+        box.orientation = LinearLayout.HORIZONTAL
+        box.gravity = android.view.Gravity.CENTER_VERTICAL
         box.setPadding(8, 10, 8, 10)
+        // thumbnail (112x63, duration badge neeche)
+        val thumbWrap = FrameLayout(this)
+        val tw = (112 * resources.displayMetrics.density).toInt()
+        val th = (63 * resources.displayMetrics.density).toInt()
+        thumbWrap.layoutParams = LinearLayout.LayoutParams(tw, th)
+        val iv = ImageView(this)
+        iv.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        iv.scaleType = ImageView.ScaleType.CENTER_CROP
+        iv.setBackgroundColor(0xFF000000.toInt())
+        thumbWrap.addView(iv)
+        val dur = fmtDur(item.durationSec)
+        if (dur.isNotEmpty()) {
+            val badge = TextView(this)
+            badge.text = dur
+            badge.setTextColor(0xFFFFFFFF.toInt())
+            badge.textSize = 10f
+            badge.setBackgroundColor(0xCC000000.toInt())
+            badge.setPadding(6, 2, 6, 2)
+            val blp = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            blp.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+            blp.setMargins(0, 0, 4, 4)
+            badge.layoutParams = blp
+            thumbWrap.addView(badge)
+        }
+        box.addView(thumbWrap)
+        loadThumbInto(item.thumb, iv)
+        // text side
+        val txtBox = LinearLayout(this)
+        txtBox.orientation = LinearLayout.VERTICAL
+        val tlp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        tlp.setMargins(10, 0, 0, 0)
+        txtBox.layoutParams = tlp
         val t = TextView(this)
         t.text = marker + item.title.take(65)
         t.setTextColor(if (highlight) 0xFF22D3EE.toInt() else 0xFFE9EEFB.toInt())
         t.textSize = 13f
+        t.maxLines = 2
+        t.ellipsize = android.text.TextUtils.TruncateAt.END
         val m = TextView(this)
         val meta = listOf(
             item.channel.take(30),
             fmtViews(item.views),
-            fmtDur(item.durationSec),
         ).filter { it.isNotEmpty() }.joinToString(" • ")
         m.text = meta.ifEmpty { item.url.take(40) }
         m.setTextColor(0xFF93A0C4.toInt())
         m.textSize = 11f
-        box.addView(t)
-        if (m.text.isNotEmpty()) box.addView(m)
+        txtBox.addView(t)
+        if (m.text.isNotEmpty()) txtBox.addView(m)
+        box.addView(txtBox)
         box.setOnClickListener { onTap() }
+        // long-press: link copy / download / share — wahi se sab
+        box.setOnLongClickListener { showRowMenu(item); true }
         parent.addView(box)
+    }
+
+    private fun loadThumbInto(url: String, iv: ImageView) {
+        try {
+            if (url.isEmpty()) return
+            synchronized(thumbCache) { thumbCache[url] }?.let { iv.setImageBitmap(it); return }
+            Thread {
+                try {
+                    val req = Request.Builder().url(url)
+                        .header("User-Agent", UA).build()
+                    thumbHttp.newCall(req).execute().use { res ->
+                        if (!res.isSuccessful) return@use
+                        val bytes = res.body?.bytes() ?: return@use
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@use
+                        try {
+                            synchronized(thumbCache) { thumbCache[url] = bmp }
+                        } catch (_: Exception) {}
+                        runOnUiThread { try { iv.setImageBitmap(bmp) } catch (_: Exception) {} }
+                    }
+                } catch (_: Exception) {}
+            }.start()
+        } catch (_: Exception) {}
+    }
+
+    /** Row long-press menu: tap-play ke alawa copy/download/share wahi se. */
+    private fun showRowMenu(item: VideoItem) {
+        try {
+            val opts = arrayOf("▶ Play", "📋 Link copy", "⬇ Download (1-tap)", "📤 Share")
+            AlertDialog.Builder(this)
+                .setTitle(item.title.take(60))
+                .setItems(opts) { _, which ->
+                    when (which) {
+                        0 -> {
+                            clearSearch()
+                            queue = emptyList()
+                            qIndex = -1
+                            renderQueue()
+                            urlInput.setText(item.url)
+                            extractAndPlay(item.url, true)
+                        }
+                        1 -> copyText(item.url)
+                        2 -> downloadViaMain(item)
+                        3 -> shareText(item.title + "\n" + item.url)
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        } catch (_: Exception) {}
+    }
+
+    private fun copyText(s: String) {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("link", s))
+            toast("Link copy ho gaya ✓")
+        } catch (_: Exception) { toast("Copy nahi ho paya.") }
+    }
+
+    private fun shareText(s: String) {
+        try {
+            val i = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"; putExtra(Intent.EXTRA_TEXT, s)
+            }
+            startActivity(Intent.createChooser(i, "Share video link"))
+        } catch (_: Exception) {}
+    }
+
+    /** Is row ka video MainActivity me 1-tap download karo (fetch+save auto). */
+    private fun downloadViaMain(item: VideoItem) {
+        try {
+            val i = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_AUTODL, item.url)
+            }
+            startActivity(i)
+            toast("Download tab me 1-tap start ho raha...")
+        } catch (e: Exception) { toast("Download nahi khul paya: ${e.message}") }
     }
 
     private fun fmtViews(v: Long): String = when {
@@ -464,30 +631,71 @@ class PlayerActivity : AppCompatActivity() {
         renderQueue()
     }
 
-    // ---------------- QUALITY PILLS ----------------
+    // ---------------- QUALITY PILLS (kitne pixel par dekhna hai) ----------------
+    // YouTube jaisa: har height (1080p/720p/...) ek pill. Progressive ho to
+    // seedha, video-only (DASH) ho to audio-track merge karke (ExoPlayer
+    // MergingMediaSource) — awaaz HAMESHA aayegi, quality aap chuno.
     private fun buildQOpts(o: JSONObject): List<QOpt> {
         val out = ArrayList<QOpt>()
         try {
             val arr = o.optJSONArray("formats") ?: return out
-            data class P(val h: Int, val url: String)
-            val prog = ArrayList<P>()
-            var audioOnly = ""
-            for (i in 0 until arr.length()) {
-                val f = arr.getJSONObject(i)
-                val u = f.optString("url", "")
-                if (u.isEmpty()) continue
-                if (f.optString("type") == "audio" && audioOnly.isEmpty()) audioOnly = u
-                if (f.optString("type") == "video" && f.optBoolean("progressive")) {
-                    prog.add(P(f.optInt("height"), u))
+            var audioUrl = ""
+            try {
+                audioUrl = o.optJSONObject("best_audio_mp4")?.optString("url", "").orEmpty()
+                if (audioUrl.isEmpty()) audioUrl = o.optJSONObject("best_audio")?.optString("url", "").orEmpty()
+            } catch (_: Exception) {}
+            if (audioUrl.isEmpty()) {
+                for (i in 0 until arr.length()) {
+                    try {
+                        val f = arr.getJSONObject(i)
+                        if (f.optString("type") == "audio") {
+                            val u = f.optString("url", "")
+                            if (u.isNotEmpty()) { audioUrl = u; break }
+                        }
+                    } catch (_: Exception) {}
                 }
             }
-            val heights = prog.map { it.h }.filter { it > 0 }.distinct().sortedDescending()
-            if (heights.isNotEmpty()) {
-                val best = prog.filter { it.h == heights[0] }.maxByOrNull { it.url.length }!!
-                out.add(QOpt("BEST ${heights[0]}p", best.url, "", true))
-                for (h in heights.drop(1).take(4)) {
-                    val p = prog.filter { it.h == h }.maxByOrNull { it.url.length }!!
-                    out.add(QOpt("${h}p", p.url, "", true))
+            // height -> best progressive + best video-only
+            val progByH = HashMap<Int, String>()
+            val dashByH = HashMap<Int, String>()
+            var audioOnly = ""
+            for (i in 0 until arr.length()) {
+                try {
+                    val f = arr.getJSONObject(i)
+                    val u = f.optString("url", "")
+                    if (u.isEmpty()) continue
+                    if (f.optString("type") == "audio") {
+                        if (audioOnly.isEmpty()) audioOnly = u
+                        continue
+                    }
+                    if (f.optString("type") != "video") continue
+                    val h = f.optInt("height")
+                    if (h <= 0) continue
+                    if (f.optBoolean("progressive")) {
+                        if (!progByH.containsKey(h)) progByH[h] = u
+                    } else {
+                        // AVC prefer (smooth), warna jo mile
+                        val v = f.optString("vcodec", "").lowercase()
+                        val cur = dashByH[h]
+                        if (cur == null) dashByH[h] = u
+                    }
+                } catch (_: Exception) {}
+            }
+            val heights = (progByH.keys + dashByH.keys).distinct().sortedDescending().take(6)
+            for ((idx, h) in heights.withIndex()) {
+                val pu = progByH[h]
+                if (!pu.isNullOrEmpty()) {
+                    out.add(QOpt(if (idx == 0) "BEST ${h}p" else "${h}p", pu, "", true))
+                } else {
+                    val du = dashByH[h].orEmpty()
+                    if (du.isNotEmpty()) {
+                        // video-only + audio merge = awaaz-sahit play
+                        val hasA = audioUrl.isNotEmpty()
+                        out.add(QOpt(
+                            if (idx == 0) "BEST ${h}p" else "${h}p",
+                            du, if (hasA) audioUrl else "", hasA,
+                        ))
+                    }
                 }
             }
             if (audioOnly.isNotEmpty()) out.add(QOpt("🎵 Audio", audioOnly, "", true))
@@ -645,6 +853,13 @@ class PlayerActivity : AppCompatActivity() {
     private fun playStream(title: String, streamUrl: String, audioUrl: String, hasAudio: Boolean) {
         try {
             releasePlayer()
+            // naya video = zoom reset (pinch 1x + chosen Fit/Crop mode rakho)
+            try {
+                pinchScale = 1f
+                playerView.scaleX = 1f
+                playerView.scaleY = 1f
+                playerView.resizeMode = zoomModes[zoomIdx]
+            } catch (_: Exception) {}
             titleText.text = title
             val dsFactory = DefaultHttpDataSource.Factory()
                 .setUserAgent(UA)
@@ -709,6 +924,13 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun toggleFullscreen() {
         isFullscreen = !isFullscreen
+        applyFullscreen()
+    }
+
+    /** YouTube jaisa full/half: portrait = half-screen (video upar + list neeche),
+     *  landscape-fullscreen = sirf video (immersive, status/nav hidden).
+     *  Button se toggle + phone ghumane par auto-adjust (onConfigurationChanged). */
+    private fun applyFullscreen() {
         try {
             requestedOrientation = if (isFullscreen)
                 ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -719,6 +941,93 @@ class PlayerActivity : AppCompatActivity() {
             else (230 * resources.displayMetrics.density).toInt()
             playerFrame.layoutParams = lp
             fsBtn.text = if (isFullscreen) "⛶ Exit" else "⛶ Fullscreen"
+            // immersive: fullscreen me system bars hatao, half me wapas lao
+            if (isFullscreen) hideSystemBars() else showSystemBars()
+        } catch (_: Exception) {}
+    }
+
+    private fun hideSystemBars() {
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                window.insetsController?.let {
+                    it.hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+                    it.systemBarsBehavior =
+                        android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun showSystemBars() {
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                window.insetsController?.show(
+                    android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+            } else {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+            }
+        } catch (_: Exception) {}
+    }
+
+    /** Phone ghumaya to YouTube jaisa auto full/half (recreate nahi hota). */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        try {
+            val land = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
+            if (land != isFullscreen) {
+                isFullscreen = land
+                applyChromeVisibility()
+                val lp = playerFrame.layoutParams
+                lp.height = if (isFullscreen) ViewGroup.LayoutParams.MATCH_PARENT
+                else (230 * resources.displayMetrics.density).toInt()
+                playerFrame.layoutParams = lp
+                fsBtn.text = if (isFullscreen) "⛶ Exit" else "⛶ Fullscreen"
+                if (isFullscreen) hideSystemBars() else showSystemBars()
+            }
+        } catch (_: Exception) {}
+    }
+
+    // ---------------- ZOOM (button + pinch) ----------------
+    private fun cycleZoom() {
+        try {
+            zoomIdx = (zoomIdx + 1) % zoomModes.size
+            playerView.resizeMode = zoomModes[zoomIdx]
+            pinchScale = 1f
+            playerView.scaleX = 1f
+            playerView.scaleY = 1f
+            zoomBtn.text = zoomLabels[zoomIdx]
+            toast(when (zoomIdx) {
+                0 -> "Fit — poora video dikhega"
+                1 -> "Crop — screen bhar ke (zoom-in)"
+                else -> "Stretch — khincha hua full"
+            })
+        } catch (_: Exception) {}
+    }
+
+    /** 2-ungli pinch: video zoom-in / zoom-out (1.0x – 3.0x). Controller kaam karta rahega. */
+    private fun setupPinchZoom() {
+        try {
+            scaleDetector = ScaleGestureDetector(this,
+                object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    override fun onScale(det: ScaleGestureDetector): Boolean {
+                        try {
+                            pinchScale = (pinchScale * det.scaleFactor).coerceIn(1f, 3f)
+                            playerView.scaleX = pinchScale
+                            playerView.scaleY = pinchScale
+                        } catch (_: Exception) {}
+                        return true
+                    }
+                })
+            playerView.setOnTouchListener { _, ev ->
+                try { scaleDetector?.onTouchEvent(ev) } catch (_: Exception) {}
+                false // consume mat karo — play/pause/controller chalta rahe
+            }
         } catch (_: Exception) {}
     }
 
@@ -819,6 +1128,8 @@ class PlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         try { WatchDownloader.cancel("wv") } catch (_: Exception) {}
         try { WatchDownloader.cancel("wa") } catch (_: Exception) {}
+        try { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } catch (_: Exception) {}
+        try { showSystemBars() } catch (_: Exception) {}
         releasePlayer()
         super.onDestroy()
     }

@@ -116,9 +116,20 @@
             android:id="@+id/playerFsBtn"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
             android:layout_weight="1"
             android:background="@drawable/bg_card"
             android:text="⛶ Fullscreen"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/playerZoomBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:text="🔍 Fit"
             android:textColor="@color/txt"
             android:textSize="12sp" />
     </LinearLayout>

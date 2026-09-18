@@ -99,22 +99,23 @@ def _moov_complete(d):
         return False
 
 
-def _probe_mp4_tracks(url, timeout=4):
-    """MP4 ke pehle 300KB (Range) se (width, height, has_audio). Fail-soft.
+def _probe_mp4_tracks(url, timeout=5):
+    """MP4 ke pehle 1MB (Range) se (width, height, has_audio). Fail-soft.
 
     has_audio: True = audio track pakka, False = moov poora mila aur audio
     track NAHI (video-only file), None = pata nahi chala (purana
     assumption barkarar). (FIX: IG music-reels video-ONLY hoti hain —
     bina verify direct download BINA AAWAZ deta tha.)
+    NOTE: Range 1MB — kuch IG files ka moov 300KB ke baad hota hai.
     """
     import urllib.request
     import struct
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": UA_DESKTOP,
-                          "Range": "bytes=0-307199", "Accept": "*/*"})
+                          "Range": "bytes=0-1048575", "Accept": "*/*"})
         with urllib.request.urlopen(req, timeout=timeout) as res:
-            d = res.read(320000)
+            d = res.read(1100000)
         if len(d) < 128 or b"moov" not in d:
             return None
         pos, best = 0, None
@@ -170,11 +171,13 @@ def _probe_mp4_dims(url, timeout=4):
     return None
 
 
-def _fill_missing_heights(formats, limit=4):
+def _fill_missing_heights(formats, limit=6):
     """Height-missing/guessed video entries (Facebook sd/hd) ki EXACT resolution
     probe karke label/height set karo + codec-unknown (FB/IG guess-progressive)
-    entries me ASLI audio-track verify karo. Video-only nikle to merge-path
-    par bhejo (audio-sahit), warna BINA AAWAZ download hota hai.
+    entries me ASLI audio-track verify karo. Video-only nikle to HAMESHA
+    merge-path par bhejo (audio-sahit), warna BINA AAWAZ download hota hai.
+    (IG silent-reels fix: alag audio dikhe ya na dikhe — confirmed
+    video-only kabhi ★1-Tap bankar nahi milegi.)
     SPEED: probes PARALLEL — sequential me 10-20s lag jata tha."""
     try:
         has_any_audio = any((x.get("type") == "audio" and x.get("url"))
@@ -216,11 +219,11 @@ def _fill_missing_heights(formats, limit=4):
     if targets:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-                futs = {ex.submit(_probe_mp4_tracks, (c.get("url") or ""), 4): (c, nd)
+                futs = {ex.submit(_probe_mp4_tracks, (c.get("url") or ""), 5): (c, nd)
                         for c, nd in targets}
                 for fut, (c, need_dims) in futs.items():
                     try:
-                        d = fut.result(timeout=5)
+                        d = fut.result(timeout=6)
                     except Exception:
                         d = None
                     try:
@@ -229,13 +232,16 @@ def _fill_missing_heights(formats, limit=4):
                             if need_dims and w and h and min(w, h) > 0:
                                 c["height"] = min(w, h)
                                 c["label"] = "%dp" % min(w, h)
-                            # Video-only CONFIRM + alag audio maujood = merge-path
-                            # (direct download BINA AAWAZ deta — yahi asli bug tha).
+                            # Video-only CONFIRM = HAMESHA merge-path (IG silent fix).
+                            # Alag audio ho to merge, na ho to downloader fallback
+                            # best 1-Tap dega — silent file kabhi nahi milegi.
                             if c.pop("_verify_audio", None):
-                                if ha is False and has_any_audio:
+                                if ha is False:
                                     c["progressive"] = False
                                     c["needs_merge"] = True
                                     c["one_tap"] = False
+                                    if not has_any_audio:
+                                        c["label"] = (c.get("label") or "") + " (audio-merge)"
                         else:
                             c.pop("_verify_audio", None)
                         c.pop("_guessed", None)

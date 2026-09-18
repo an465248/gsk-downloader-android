@@ -83,6 +83,24 @@
         android:textColor="@color/mut"
         android:textSize="12sp" />
 
+    <!-- Quality pills (jo chal raha hai wahi save hoga) + 1-tap download -->
+    <LinearLayout
+        android:id="@+id/playerQPills"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal" />
+
+    <Button
+        android:id="@+id/playerDlBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_btn"
+        android:text="⬇  Download (jo chal raha hai, 1-tap)"
+        android:textColor="#04070F"
+        android:textStyle="bold" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -98,9 +116,9 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:background="@null"
-            android:hint="YouTube link paste karo..."
+            android:hint="YouTube link ya search text..."
             android:imeOptions="actionGo"
-            android:inputType="textUri"
+            android:inputType="text"
             android:singleLine="true"
             android:textColor="@color/txt"
             android:textColorHint="#5B6A94"
@@ -115,6 +133,24 @@
             android:textColor="#04070F"
             android:textStyle="bold" />
     </LinearLayout>
+
+    <TextView
+        android:id="@+id/playerSearchTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Search results"
+        android:textColor="@color/txt"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/playerSearchList"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="vertical" />
 
     <TextView
         android:id="@+id/playerQueueTitle"

@@ -526,6 +526,70 @@ def extract(url, cookiefile=""):
         return json.dumps({"error": friendly(e)}, ensure_ascii=False)
 
 
+def search(query, limit=12):
+    """YouTube search (Watch-tab wali search bar ke liye). Hamesha JSON string.
+
+    API key nahi chahiye — yt-dlp ka ytsearch istemal hota hai.
+    Returns {results:[{id,title,url,thumbnail,duration}], count:n}.
+    """
+    try:
+        return json.dumps(_search(query, limit), ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return json.dumps({"error": friendly(e)}, ensure_ascii=False)
+
+
+def _search(query, limit=12):
+    q = (query or "").strip()
+    if not q:
+        return {"error": "Search text khaali hai."}
+    try:
+        limit = max(1, min(int(limit or 12), 25))
+    except Exception:
+        limit = 12
+    fopts = {
+        "quiet": True, "no_warnings": True, "skip_download": True,
+        "extract_flat": True,
+        "socket_timeout": 10,
+        # NOTE: custom User-Agent lagane par YouTube search KHAALI milta hai —
+        # isliye search me yt-dlp ka default UA hi rehne do (extract wala nahi).
+    }
+    try:
+        with yt_dlp.YoutubeDL(fopts) as ydl:
+            info = ydl.extract_info("ytsearch%d:%s" % (limit, q), download=False)
+    except Exception as e:  # noqa: BLE001
+        return {"error": friendly(e)}
+    out = []
+    try:
+        for e in (info.get("entries") or [])[:limit]:
+            if not isinstance(e, dict):
+                continue
+            vid = e.get("id") or ""
+            if not vid:
+                continue
+            url = e.get("url") or e.get("webpage_url") or ""
+            if not url or not url.startswith("http"):
+                url = "https://www.youtube.com/watch?v=" + vid
+            title = e.get("title") or vid
+            thumb = ""
+            try:
+                ths = e.get("thumbnails") or []
+                if ths:
+                    thumb = (ths[-1] or {}).get("url") or ""
+            except Exception:
+                pass
+            if not thumb:
+                thumb = "https://i.ytimg.com/vi/%s/hqdefault.jpg" % vid
+            try:
+                dur = int(e.get("duration") or 0)
+            except Exception:
+                dur = 0
+            out.append({"id": vid, "title": title, "url": url,
+                        "thumbnail": thumb, "duration": dur})
+    except Exception:
+        pass
+    return {"results": out, "count": len(out)}
+
+
 # YouTube web client ki public key (youtubei API ke liye — app jaisi key).
 YT_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 

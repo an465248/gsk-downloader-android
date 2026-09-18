@@ -323,6 +323,9 @@ class MainActivity : AppCompatActivity() {
     }
     // Engine ready hone se pehle aaya share-link (auto-fetch ke liye pending rakho)
     private var pendingSharedLink: String? = null
+    // Watch screen se 1-tap download (fetch ke baad best file auto-start)
+    private var pendingAutodl: String? = null
+    private var autodlAfterFetch = false
 
     private val jobs = ConcurrentHashMap<String, DownloadJob>()
 
@@ -510,6 +513,15 @@ class MainActivity : AppCompatActivity() {
                     renderCookieStatus()
                     status("Link paste karo aur Get Video dabao." + cookieLine())
                     // onCreate ke time aaya share-link ab fetch karo (auto)
+                    val auto0 = pendingAutodl ?: intent.getStringExtra(PlayerActivity.EXTRA_AUTODL)
+                    pendingAutodl = null
+                    if (!auto0.isNullOrEmpty()) {
+                        urlInput.setText(auto0)
+                        autodlAfterFetch = true
+                        toast("1-tap download: fetch ho raha...")
+                        fetchFormats()
+                        return@runOnUiThread
+                    }
                     val pend = pendingSharedLink ?: extractSharedLink(intent)
                     pendingSharedLink = null
                     if (!pend.isNullOrEmpty()) {
@@ -568,7 +580,7 @@ class MainActivity : AppCompatActivity() {
         setupFaq(R.id.fq5, R.id.fa5)
         try {
             val ft: TextView = findViewById(R.id.footerText)
-            ft.text = "© 2026 LVIGS Pvt. Ltd. • v1.9\n🇮🇳 India • English • INR"
+            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.0\n🇮🇳 India • English • INR"
         } catch (_: Exception) {}
     }
 
@@ -893,6 +905,20 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        // Watch screen se 1-tap download aaya ho to seedha fetch+download
+        val auto = intent.getStringExtra(PlayerActivity.EXTRA_AUTODL)
+        if (!auto.isNullOrEmpty()) {
+            if (pyReady) {
+                urlInput.setText(auto)
+                autodlAfterFetch = true
+                toast("1-tap download: fetch ho raha...")
+                fetchFormats()
+            } else {
+                pendingAutodl = auto
+                toast("1-tap download: engine ready hote hi start hoga...")
+            }
+            return
+        }
         // Engine abhi ready nahi to link pending rakho (auto-fetch ready par hoga)
         val link = extractSharedLink(intent)
         if (!link.isNullOrEmpty()) {
@@ -1205,6 +1231,11 @@ class MainActivity : AppCompatActivity() {
                         renderCookieStatus()
                         status("${list.size} qualities mili. Preview dekho (⏪10s/10s⏩), quality chuno, download dabao.")
                         toast("Video mil gaya! Preview ready.")
+                        // Watch screen se 1-tap download: best file turant start
+                        if (autodlAfterFetch) {
+                            autodlAfterFetch = false
+                            autoBestDownload()
+                        }
                     }
     }
 
@@ -1340,8 +1371,8 @@ class MainActivity : AppCompatActivity() {
     private fun showAbout() {
         try {
             AlertDialog.Builder(this)
-                .setTitle("ℹ GSK Downloader v1.9")
-                .setMessage("YouTube, Instagram, Facebook + 1600 sites se download.\n\n★ NAYA: ☰ Sidebar me Ad-Free Player — direct stream bajta hai, isliye ZERO ads.\n\n© 2026 LVIGS Pvt. Ltd. 🇮🇳")
+                .setTitle("ℹ GSK Downloader v2.0")
+                .setMessage("YouTube, Instagram, Facebook + 1600 sites se download.\n\n★ WATCH: ☰ Sidebar me search + ad-free play + related videos + 1-tap download.\n★ Screen off par bhi audio chalta rehta hai.\n\n© 2026 LVIGS Pvt. Ltd. 🇮🇳")
                 .setPositiveButton("OK", null)
                 .show()
         } catch (_: Exception) {}
@@ -1385,8 +1416,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun onFormatClick(fmt: Fmt, key: String) {
-        if (fmt.url.isEmpty()) { toast("Is format ka link nahi mila."); return }
+    /** Watch screen se 1-tap download: best audio-sahit file turant start karo. */
+    private fun autoBestDownload() {
+        try {
+            val fb = bestOneTapFallback()
+                ?: allFormats.firstOrNull { it.progressive && it.type == "video" && it.url.isNotEmpty() }
+                ?: allFormats.firstOrNull { it.type == "video" && it.url.isNotEmpty() }
+                ?: allFormats.firstOrNull { it.url.isNotEmpty() }
+            if (fb != null) {
+                toast("1-tap download start: ${fb.label} (audio ke saath)...")
+                status("1-tap download: ${fb.label} ...")
+                onFormatClick(fb, dlKey(fb))
+            } else {
+                toast("Downloadable format nahi mila.")
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun onFormatClick(fmt: Fmt, key: String) {        if (fmt.url.isEmpty()) { toast("Is format ka link nahi mila."); return }
         val st = adapter.getState(key)
         if (st.state == DlState.DOWNLOADING || st.state == DlState.PAUSED) {
             toast("Ye download pehle se chal raha hai — Pause/Cancel use karo.")

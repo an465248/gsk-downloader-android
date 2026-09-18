@@ -583,8 +583,14 @@ def _search(query, limit=12):
                 dur = int(e.get("duration") or 0)
             except Exception:
                 dur = 0
+            try:
+                views = int(e.get("view_count") or 0)
+            except Exception:
+                views = 0
             out.append({"id": vid, "title": title, "url": url,
-                        "thumbnail": thumb, "duration": dur})
+                        "thumbnail": thumb, "duration": dur,
+                        "channel": e.get("channel") or e.get("uploader") or "",
+                        "views": views})
     except Exception:
         pass
     return {"results": out, "count": len(out)}

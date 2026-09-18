@@ -7,12 +7,14 @@
     android:fillViewport="true">
 
 <LinearLayout
+    android:id="@+id/playerRoot"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:padding="16dp">
 
     <LinearLayout
+        android:id="@+id/playerHeader"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
@@ -61,6 +63,7 @@
         android:textStyle="bold" />
 
     <FrameLayout
+        android:id="@+id/playerFrame"
         android:layout_width="match_parent"
         android:layout_height="230dp"
         android:layout_marginTop="8dp"
@@ -91,15 +94,75 @@
         android:layout_marginTop="8dp"
         android:orientation="horizontal" />
 
-    <Button
-        android:id="@+id/playerDlBtn"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:background="@drawable/bg_btn"
-        android:text="⬇  Download (jo chal raha hai, 1-tap)"
-        android:textColor="#04070F"
-        android:textStyle="bold" />
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/playerSpeedBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:text="1x ⚙"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/playerFsBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:text="⛶ Fullscreen"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/playerDlVideoBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_btn"
+            android:text="⬇ Video"
+            android:textColor="#04070F"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/playerDlAudioBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_btn"
+            android:text="🎵 Audio"
+            android:textColor="#04070F"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/playerCancelDl"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:text="✕"
+            android:textColor="@color/txt"
+            android:visibility="gone" />
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -134,6 +197,38 @@
             android:textStyle="bold" />
     </LinearLayout>
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🕘 "
+            android:textColor="@color/mut"
+            android:textSize="12sp" />
+
+        <LinearLayout
+            android:id="@+id/playerHistRow"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="horizontal" />
+
+        <Button
+            android:id="@+id/playerHistClear"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:minWidth="0dp"
+            android:text="Clear"
+            android:textColor="@color/mut"
+            android:textSize="11sp" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/playerSearchTitle"
         android:layout_width="match_parent"
@@ -151,6 +246,17 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:orientation="vertical" />
+
+    <Button
+        android:id="@+id/playerMoreBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:background="@drawable/bg_card"
+        android:text="▼ Aur results dikhao"
+        android:textColor="@color/accent"
+        android:textSize="12sp"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/playerQueueTitle"

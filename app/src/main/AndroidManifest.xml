@@ -69,7 +69,8 @@
         <activity
             android:name=".PlayerActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden" />
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
 
         <!-- Background download service: notification bar progress + app background me bhi zinda -->
         <service

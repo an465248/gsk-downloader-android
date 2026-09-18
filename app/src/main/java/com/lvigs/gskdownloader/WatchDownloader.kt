@@ -93,8 +93,10 @@ object WatchDownloader {
                 fun report(force: Boolean = false) {
                     val now = System.currentTimeMillis()
                     if (!force && now - lastUi < 500) return
-                    lastUi = now
+                    // SPEED-FIX: lastUi update se PEHLE elapsed nikalo — pehle dt
+                    // hamesha 1ms aata tha (speed hazaaron guna badhi dikhti thi).
                     val dt = (now - lastUi).coerceAtLeast(1)
+                    lastUi = now
                     val inst = (got - lastBytes) * 1000.0 / dt
                     lastBytes = got
                     ema = if (ema <= 0) inst else ema * 0.65 + inst * 0.35

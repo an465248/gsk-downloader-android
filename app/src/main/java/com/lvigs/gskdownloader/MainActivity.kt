@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
@@ -416,7 +417,10 @@ class MainActivity : AppCompatActivity() {
             .getBoolean("hidden", false)
         cookieStatusText = findViewById(R.id.cookieStatusText)
 
-        upNextAdapter = UpNextAdapter({ item -> openUpNext(item) })
+        upNextAdapter = UpNextAdapter(
+            { item -> openUpNext(item) },
+            onLongTap = { item -> showUpNextMenu(item) },
+        )
         upNextRecycler.layoutManager = LinearLayoutManager(this)
         upNextRecycler.adapter = upNextAdapter
         upNextRecycler.isNestedScrollingEnabled = false
@@ -425,6 +429,7 @@ class MainActivity : AppCompatActivity() {
             { item -> openUpNext(item) },
             { item -> removeRecentItem(item) },
             showClose = true,
+            onLongTap = { item -> showUpNextMenu(item) },
         )
         recentRecycler.layoutManager = LinearLayoutManager(this)
         recentRecycler.adapter = recentAdapter
@@ -583,7 +588,7 @@ class MainActivity : AppCompatActivity() {
         setupFaq(R.id.fq5, R.id.fa5)
         try {
             val ft: TextView = findViewById(R.id.footerText)
-            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.1\n🇮🇳 India • English • INR"
+            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.3\n🇮🇳 India • English • INR"
         } catch (_: Exception) {}
     }
 
@@ -774,6 +779,44 @@ class MainActivity : AppCompatActivity() {
         urlInput.setText(item.url)
         toast("Next video load ho raha: ${item.title.take(40)}...")
         fetchFormats()
+    }
+
+    /** Row long-press: Play / Copy link / Download — wahi se sab (YouTube jaisa). */
+    private fun showUpNextMenu(item: UpNextItem) {
+        try {
+            if (item.url.isEmpty()) return
+            AlertDialog.Builder(this)
+                .setTitle(item.title.take(60).ifEmpty { "Video" })
+                .setItems(arrayOf("▶ Play", "📋 Link copy", "⬇ Download (1-tap)", "📤 Share")) { _, which ->
+                    when (which) {
+                        0 -> openUpNext(item)
+                        1 -> {
+                            try {
+                                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("link", item.url))
+                                toast("Link copy ho gaya ✓")
+                            } catch (_: Exception) { toast("Copy nahi ho paya.") }
+                        }
+                        2 -> {
+                            urlInput.setText(item.url)
+                            autodlAfterFetch = true
+                            toast("1-tap download: fetch ho raha...")
+                            fetchFormats()
+                        }
+                        3 -> {
+                            try {
+                                val i = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, item.title + "\n" + item.url)
+                                }
+                                startActivity(Intent.createChooser(i, "Share video link"))
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        } catch (_: Exception) {}
     }
 
     /** Current video ko Recent me sabse upar rakho (max 15, duplicate hatao).
@@ -1374,7 +1417,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAbout() {
         try {
             AlertDialog.Builder(this)
-                .setTitle("ℹ GSK Downloader v2.1")
+                .setTitle("ℹ GSK Downloader v2.3")
                 .setMessage("YouTube, Instagram, Facebook + 1600 sites se download.\n\n★ WATCH: ☰ Sidebar me search + ad-free play + related videos + 1-tap download.\n★ Screen off par bhi audio chalta rehta hai.\n\n© 2026 LVIGS Pvt. Ltd. 🇮🇳")
                 .setPositiveButton("OK", null)
                 .show()
@@ -2455,6 +2498,7 @@ class MainActivity : AppCompatActivity() {
         private val onTap: (UpNextItem) -> Unit,
         private val onClose: ((UpNextItem) -> Unit)? = null,
         private val showClose: Boolean = false,
+        private val onLongTap: ((UpNextItem) -> Unit)? = null,
     ) : RecyclerView.Adapter<UpNextAdapter.VH>() {
         private var items: List<UpNextItem> = emptyList()
         inner class VH(v: View) : RecyclerView.ViewHolder(v) {
@@ -2477,6 +2521,9 @@ class MainActivity : AppCompatActivity() {
             val item = items[pos]
             h.title.text = item.title.ifEmpty { "Video" }
             h.meta.text = if (item.durationSec > 0) fmtDur(item.durationSec) else item.url.take(50)
+            // RECYCLE-FIX: holder reuse hone par purani thumb-thread galat row me
+            // bitmap laga deti thi — tag se verify karo, warna galat thumbnails.
+            h.thumb.tag = item.thumb
             h.thumb.setImageDrawable(null)
             if (item.thumb.isNotEmpty()) {
                 Thread {
@@ -2489,13 +2536,19 @@ class MainActivity : AppCompatActivity() {
                             val bytes = res.body?.bytes() ?: return@use
                             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@use
                             runOnUiThread {
-                                try { h.thumb.setImageBitmap(bmp) } catch (_: Exception) {}
+                                try {
+                                    if (h.thumb.tag == item.thumb) h.thumb.setImageBitmap(bmp)
+                                } catch (_: Exception) {}
                             }
                         }
                     } catch (_: Exception) {}
                 }.start()
             }
             h.itemView.setOnClickListener { onTap(item) }
+            h.itemView.setOnLongClickListener {
+                try { onLongTap?.invoke(item) } catch (_: Exception) {}
+                true
+            }
             // Recent row ka ✕ (Up Next me hidden): wahi item history se hatao
             if (showClose && onClose != null) {
                 h.close.visibility = View.VISIBLE

@@ -28,9 +28,14 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -89,6 +94,10 @@ class PlayerActivity : AppCompatActivity() {
     private var controller: MediaController? = null
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private val pendingCtrl = ArrayDeque<(MediaController) -> Unit>()
+    // FAIL-SAFE: service 10s me na jude (kisi phone me bind fail ho) to
+    // local player se bajao — video RUKNA nahi chahiye. Status me mode dikhta hai.
+    private var useLocal = false
+    private var localPlayer: ExoPlayer? = null
     private var cookiePath: String = ""
     private var pyReady = false
 
@@ -304,6 +313,13 @@ class PlayerActivity : AppCompatActivity() {
             controllerFuture = MediaController.Builder(this, token).buildAsync()
             controllerFuture?.addListener({
                 try {
+                    // Watchdog pehle local par shift ho chuka ho to late
+                    // controller ko turant chhodo (double-audio nahi).
+                    if (useLocal) {
+                        try { controllerFuture?.let { MediaController.releaseFuture(it) } } catch (_: Exception) {}
+                        controllerFuture = null
+                        return@addListener
+                    }
                     controller = controllerFuture?.get()
                     playerView.player = controller
                     controller?.addListener(ctrlListener)
@@ -314,6 +330,19 @@ class PlayerActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {}
             }, ContextCompat.getMainExecutor(this))
+            // Watchdog: service-bind atak jaye to local player par shift.
+            try {
+                playerRoot.postDelayed({
+                    try {
+                        if (controller == null && !useLocal && !isFinishing && !isDestroyed) {
+                            useLocal = true
+                            playerView.player = null
+                            toast("Service slow hai — phone player se baja rahe...")
+                            status("Phone player mode (service nahi juda). Video yahin bajega.")
+                        }
+                    } catch (_: Exception) {}
+                }, 10000)
+            } catch (_: Exception) {}
         } catch (_: Exception) {}
     }
 
@@ -856,7 +885,9 @@ class PlayerActivity : AppCompatActivity() {
         val q = qOpts[i]
         // BUG-FIX: quality badalne par video shuru se nahi — wahi position se
         // (YouTube jaisa). Seek prepare ke baad lagta hai.
-        val pos = try { controller?.currentPosition ?: 0L } catch (_: Exception) { 0L }
+        val pos = try {
+            controller?.currentPosition ?: localPlayer?.currentPosition ?: 0L
+        } catch (_: Exception) { 0L }
         playStream(curTitle, q.url, q.audioUrl, q.hasAudio, pos)
         toast("Quality: ${q.label}")
     }
@@ -979,6 +1010,12 @@ class PlayerActivity : AppCompatActivity() {
                 playerView.resizeMode = zoomModes[zoomIdx]
             } catch (_: Exception) {}
             titleText.text = title
+            // useLocal (service fail-safe) ho to phone ke andar bajao,
+            // warna background service me (notification ke saath).
+            if (useLocal) {
+                playLocal(title, streamUrl, audioUrl, hasAudio, startAtMs)
+                return
+            }
             // Service ka player use hota hai (background + notification ke liye).
             // Merge factory service me hai — yahan sirf item bhejo.
             val item = PlayerService.itemFor(title, bypass(streamUrl), bypass(audioUrl), hasAudio)
@@ -998,6 +1035,61 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    /** Fail-safe local play (service na jude to): activity ke andar ExoPlayer.
+     *  Background/notification nahi milega, lekin video RUKEGA nahi. */
+    private fun playLocal(title: String, streamUrl: String, audioUrl: String, hasAudio: Boolean, startAtMs: Long = 0) {
+        try {
+            try { localPlayer?.stop() } catch (_: Exception) {}
+            try { localPlayer?.release() } catch (_: Exception) {}
+            localPlayer = null
+            val dsFactory = DefaultHttpDataSource.Factory()
+                .setUserAgent(UA)
+                .setConnectTimeoutMs(15000)
+                .setReadTimeoutMs(15000)
+                .setAllowCrossProtocolRedirects(true)
+            val videoSrc = ProgressiveMediaSource.Factory(dsFactory)
+                .createMediaSource(androidx.media3.common.MediaItem.fromUri(bypass(streamUrl)))
+            val source = if (hasAudio || audioUrl.isEmpty()) {
+                videoSrc
+            } else {
+                val audioSrc = ProgressiveMediaSource.Factory(dsFactory)
+                    .createMediaSource(androidx.media3.common.MediaItem.fromUri(bypass(audioUrl)))
+                MergingMediaSource(videoSrc, audioSrc)
+            }
+            val p = ExoPlayer.Builder(this).build()
+            localPlayer = p
+            try { p.setWakeMode(C.WAKE_MODE_LOCAL) } catch (_: Exception) {}
+            playerView.player = p
+            p.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_ENDED) {
+                        val next = qIndex + 1
+                        if (next < queue.size) {
+                            try { toast("Agla: ${queue[next].title.take(30)}...") } catch (_: Exception) {}
+                            playQueueItem(next)
+                        } else {
+                            status("Khatm! 🚫 Poora video zero ads ke saath.")
+                        }
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    status("Play error: ${error.message?.take(100)} — dobara Play dabao.")
+                }
+            })
+            p.setMediaSource(source)
+            p.prepare()
+            try {
+                if (startAtMs > 1000) p.seekTo(startAtMs)
+            } catch (_: Exception) {}
+            p.playWhenReady = true
+            p.setPlaybackSpeed(speeds[speedIdx])
+            status("🚫 Ad-Free (phone player) chal raha hai...")
+        } catch (e: Exception) {
+            status("Play nahi ho paya: ${e.message?.take(100)}")
+        }
+    }
+
     private fun showSpeedDialog() {
         try {
             val labels = speeds.map { if (it == 1f) "Normal" else "${it}x" }.toTypedArray()
@@ -1006,6 +1098,7 @@ class PlayerActivity : AppCompatActivity() {
                 .setSingleChoiceItems(labels, speedIdx) { d, which ->
                     speedIdx = which
                     withController { try { it.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {} }
+                    try { localPlayer?.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {}
                     try { speedBtn.text = "${labels[which]} ⚙" } catch (_: Exception) {}
                     toast("Speed: ${labels[which]}")
                     d.dismiss()
@@ -1149,10 +1242,10 @@ class PlayerActivity : AppCompatActivity() {
         super.onUserLeaveHint()
         try {
             val c = controller
-            if (Build.VERSION.SDK_INT >= 26 && c != null &&
-                c.playbackState != Player.STATE_IDLE &&
-                c.playWhenReady
-            ) {
+            val lp = localPlayer
+            val st = c?.playbackState ?: lp?.playbackState ?: Player.STATE_IDLE
+            val ready = c?.playWhenReady ?: lp?.playWhenReady ?: false
+            if (Build.VERSION.SDK_INT >= 26 && st != Player.STATE_IDLE && ready) {
                 val p = PictureInPictureParams.Builder()
                     .setAspectRatio(Rational(16, 9))
                     .build()
@@ -1217,6 +1310,9 @@ class PlayerActivity : AppCompatActivity() {
         controller = null
         controllerFuture = null
         try { pendingCtrl.clear() } catch (_: Exception) {}
+        try { localPlayer?.stop() } catch (_: Exception) {}
+        try { localPlayer?.release() } catch (_: Exception) {}
+        localPlayer = null
     }
 
     // NOTE: onPause me player rokna NAHI — screen off / Home (PiP) / Back par

@@ -588,7 +588,7 @@ class MainActivity : AppCompatActivity() {
         setupFaq(R.id.fq5, R.id.fa5)
         try {
             val ft: TextView = findViewById(R.id.footerText)
-            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.5\n🇮🇳 India • English • INR"
+            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.6\n🇮🇳 India • English • INR"
         } catch (_: Exception) {}
     }
 

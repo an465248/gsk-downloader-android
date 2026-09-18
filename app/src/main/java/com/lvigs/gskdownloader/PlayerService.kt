@@ -5,9 +5,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -79,6 +81,13 @@ class PlayerService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
+        // BUG-FIX (auto-home-screen): startForegroundService ke baad system
+        // ~5s me startForeground maangta hai. Video link fetch hone me usse
+        // zyada lagta hai (extract = seconds) — tab tak media nahi bajta to
+        // timeout par POORA APP PROCESS mar jata tha = home screen.
+        // Isliye turant placeholder notification lagao; asli player
+        // notification baad me isi ID par replace ho jayegi.
+        startForegroundNow()
         val dsFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(UA)
             .setConnectTimeoutMs(15000)
@@ -222,6 +231,27 @@ class PlayerService : MediaSessionService() {
             action: String,
             extras: Bundle,
         ): Boolean = false
+    }
+
+    /** Service start hote hi foreground pakdo (timeout-killer). */
+    private fun startForegroundNow() {
+        try {
+            val nb = NotificationCompat.Builder(this, CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle("GSK Player")
+                .setContentText("Taiyaar ho raha hai... (link fetch ho raha)")
+                .setContentIntent(contentIntent())
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+            if (Build.VERSION.SDK_INT >= 29) {
+                ServiceCompat.startForeground(
+                    this, NOTIF_ID, nb.build(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+                )
+            } else {
+                ServiceCompat.startForeground(this, NOTIF_ID, nb.build(), 0)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun ensureChannel() {

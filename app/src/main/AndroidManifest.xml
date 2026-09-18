@@ -10,6 +10,8 @@
     <!-- Background download: app minimize karne par bhi download zinda rahe -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Background play (notification controls): mediaPlayback foreground type -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
@@ -77,5 +79,12 @@
             android:name=".GskDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Background player: Back dabane par bhi bajta rahe + notification me
+             Pause/Next/Prev/Stop. Media3 MediaSessionService. -->
+        <service
+            android:name=".PlayerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
 </manifest>

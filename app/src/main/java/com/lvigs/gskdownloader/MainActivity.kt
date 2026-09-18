@@ -588,7 +588,7 @@ class MainActivity : AppCompatActivity() {
         setupFaq(R.id.fq5, R.id.fa5)
         try {
             val ft: TextView = findViewById(R.id.footerText)
-            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.4\n🇮🇳 India • English • INR"
+            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.5\n🇮🇳 India • English • INR"
         } catch (_: Exception) {}
     }
 
@@ -1427,7 +1427,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAbout() {
         try {
             AlertDialog.Builder(this)
-                .setTitle("ℹ GSK Downloader v2.4")
+                .setTitle("ℹ GSK Downloader v2.5")
                 .setMessage("YouTube, Instagram, Facebook + 1600 sites se download.\n\n★ WATCH: ☰ Sidebar me search + ad-free play + related videos + 1-tap download.\n★ Screen off par bhi audio chalta rehta hai.\n\n© 2026 LVIGS Pvt. Ltd. 🇮🇳")
                 .setPositiveButton("OK", null)
                 .show()

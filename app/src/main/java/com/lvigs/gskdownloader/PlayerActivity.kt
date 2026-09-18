@@ -3,6 +3,7 @@ package com.lvigs.gskdownloader
 import android.app.PictureInPictureParams
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -10,7 +11,6 @@ import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
 import android.util.Rational
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -27,15 +27,15 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.MergingMediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.google.common.util.concurrent.ListenableFuture
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -84,8 +84,11 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var fsBtn: Button
     private lateinit var zoomBtn: Button
 
-    private var exo: ExoPlayer? = null
-    private var wakeLock: PowerManager.WakeLock? = null
+    // Background service ka player (MediaController): activity marne par bhi
+    // bajta rahe + notification controls. exo/wakeLock ki jagah yehi hai.
+    private var controller: MediaController? = null
+    private var controllerFuture: ListenableFuture<MediaController>? = null
+    private val pendingCtrl = ArrayDeque<(MediaController) -> Unit>()
     private var cookiePath: String = ""
     private var pyReady = false
 
@@ -164,6 +167,25 @@ class PlayerActivity : AppCompatActivity() {
         fsBtn = findViewById(R.id.playerFsBtn)
         zoomBtn = findViewById(R.id.playerZoomBtn)
 
+        // Fullscreen me bhi ye controls dikhengi (nahi to Exit milta hi nahi):
+        // video + speed/fullscreen/zoom + quality pills + download.
+        fsKeep = setOf(R.id.playerCtrlRow, R.id.playerQPillsScroll, R.id.playerDlRow)
+
+        // Back dabane par fullscreen se pehle normal screen par aao (app band nahi).
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : androidx.activity.OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (isFullscreen) {
+                        toggleFullscreen()
+                        return
+                    }
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            },
+        )
+
         // FIX: 1 min baad screen off — video dekhte time screen ON rakho
         // (YouTube jaisa). PARTIAL_WAKE_LOCK sirf background-audio ke liye
         // tha; screen ke liye ye flag chahiye. Back par onDestroy me hatt jayega.
@@ -176,6 +198,7 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {}
         zoomBtn.setOnClickListener { cycleZoom() }
         setupPinchZoom()
+        ensurePlayerService()
 
         findViewById<Button>(R.id.playerBackBtn).setOnClickListener { finish() }
         goBtn.setOnClickListener { playFromInput() }
@@ -261,6 +284,78 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    /** Background service start + MediaController jodo.
+     *  Controller service ke player ko chalata hai — activity band hone par
+     *  bhi playback + notification zinda rehte hain. */
+    private fun ensurePlayerService() {
+        try {
+            val i = Intent(this, PlayerService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        } catch (_: Exception) {}
+        // Notification ke Next/Prev = queue ka agla/pichla (extract karke).
+        try {
+            PlayerService.externalNext = { runOnUiThread { stepQueue(1) } }
+            PlayerService.externalPrev = { runOnUiThread { stepQueue(-1) } }
+        } catch (_: Exception) {}
+        try {
+            val token = SessionToken(this, ComponentName(this, PlayerService::class.java))
+            controllerFuture = MediaController.Builder(this, token).buildAsync()
+            controllerFuture?.addListener({
+                try {
+                    controller = controllerFuture?.get()
+                    playerView.player = controller
+                    controller?.addListener(ctrlListener)
+                    applySpeed()
+                    while (true) {
+                        val fn = pendingCtrl.removeFirstOrNull() ?: break
+                        try { fn(controller!!) } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {}
+            }, ContextCompat.getMainExecutor(this))
+        } catch (_: Exception) {}
+    }
+
+    private fun withController(fn: (MediaController) -> Unit) {
+        try {
+            val c = controller
+            if (c != null) fn(c) else pendingCtrl.add(fn)
+        } catch (_: Exception) {}
+    }
+
+    private fun applySpeed() {
+        try { controller?.setPlaybackSpeed(speeds[speedIdx]) } catch (_: Exception) {}
+    }
+
+    private val ctrlListener = object : Player.Listener {
+        override fun onPlaybackStateChanged(state: Int) {
+            if (state == Player.STATE_ENDED) {
+                val next = qIndex + 1
+                if (next < queue.size) {
+                    try { toast("Agla: ${queue[next].title.take(30)}...") } catch (_: Exception) {}
+                    playQueueItem(next)
+                } else {
+                    status("Khatm! 🚫 Poora video zero ads ke saath.")
+                }
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            status("Play error: ${error.message?.take(100)} — dobara Play dabao.")
+        }
+    }
+
+    /** Queue me aage/peeche (notification Next/Prev + buttons sab yahi). */
+    private fun stepQueue(dir: Int) {
+        try {
+            if (queue.isEmpty()) { toast("Up Next khaali hai."); return }
+            var idx = qIndex + dir
+            if (idx < 0) idx = 0
+            if (idx >= queue.size) idx = queue.size - 1
+            if (idx == qIndex && dir > 0) { toast("Queue khatm."); return }
+            playQueueItem(idx)
+        } catch (_: Exception) {}
     }
 
     /** Input link ho to play, warna YouTube search (+ history save). */
@@ -759,7 +854,10 @@ class PlayerActivity : AppCompatActivity() {
         qSel = i
         setQOpts(qOpts, i)
         val q = qOpts[i]
-        playStream(curTitle, q.url, q.audioUrl, q.hasAudio)
+        // BUG-FIX: quality badalne par video shuru se nahi — wahi position se
+        // (YouTube jaisa). Seek prepare ke baad lagta hai.
+        val pos = try { controller?.currentPosition ?: 0L } catch (_: Exception) { 0L }
+        playStream(curTitle, q.url, q.audioUrl, q.hasAudio, pos)
         toast("Quality: ${q.label}")
     }
 
@@ -871,9 +969,8 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ---------------- PLAYER (ad-free + PiP + background) ----------------
-    private fun playStream(title: String, streamUrl: String, audioUrl: String, hasAudio: Boolean) {
+    private fun playStream(title: String, streamUrl: String, audioUrl: String, hasAudio: Boolean, startAtMs: Long = 0) {
         try {
-            releasePlayer()
             // naya video = zoom reset (pinch 1x + chosen Fit/Crop mode rakho)
             try {
                 pinchScale = 1f
@@ -882,45 +979,20 @@ class PlayerActivity : AppCompatActivity() {
                 playerView.resizeMode = zoomModes[zoomIdx]
             } catch (_: Exception) {}
             titleText.text = title
-            val dsFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent(UA)
-                .setConnectTimeoutMs(15000)
-                .setReadTimeoutMs(15000)
-                .setAllowCrossProtocolRedirects(true)
-            val videoSrc = ProgressiveMediaSource.Factory(dsFactory)
-                .createMediaSource(MediaItem.fromUri(bypass(streamUrl)))
-            val source = if (hasAudio || audioUrl.isEmpty()) {
-                videoSrc
-            } else {
-                val audioSrc = ProgressiveMediaSource.Factory(dsFactory)
-                    .createMediaSource(MediaItem.fromUri(bypass(audioUrl)))
-                MergingMediaSource(videoSrc, audioSrc)
+            // Service ka player use hota hai (background + notification ke liye).
+            // Merge factory service me hai — yahan sirf item bhejo.
+            val item = PlayerService.itemFor(title, bypass(streamUrl), bypass(audioUrl), hasAudio)
+            withController { c ->
+                try {
+                    c.setMediaItem(item, if (startAtMs > 1000) startAtMs else 0)
+                    c.prepare()
+                    c.setPlaybackSpeed(speeds[speedIdx])
+                    c.play()
+                    status("🚫 Ad-Free chal raha hai... (Back = background play, notification se Pause/Next/Stop)")
+                } catch (e: Exception) {
+                    status("Play nahi ho paya: ${e.message?.take(100)}")
+                }
             }
-            val player = ExoPlayer.Builder(this).build()
-            exo = player
-            playerView.player = player
-            player.addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    if (state == Player.STATE_ENDED) {
-                        val next = qIndex + 1
-                        if (next < queue.size) {
-                            toast("Agla: ${queue[next].title.take(30)}...")
-                            playQueueItem(next)
-                        } else {
-                            status("Khatm! 🚫 Poora video zero ads ke saath.")
-                        }
-                    }
-                }
-                override fun onPlayerError(error: PlaybackException) {
-                    status("Play error: ${error.message?.take(100)} — dobara Play dabao.")
-                }
-            })
-            player.setMediaSource(source)
-            player.prepare()
-            player.playWhenReady = true
-            player.setPlaybackSpeed(speeds[speedIdx])
-            acquireWake()
-            status("🚫 Ad-Free chal raha hai... (Home dabao PiP, screen off par audio)")
         } catch (e: Exception) {
             status("Play nahi ho paya: ${e.message?.take(100)}")
         }
@@ -933,8 +1005,8 @@ class PlayerActivity : AppCompatActivity() {
                 .setTitle("Playback speed")
                 .setSingleChoiceItems(labels, speedIdx) { d, which ->
                     speedIdx = which
-                    try { exo?.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {}
-                    speedBtn.text = "${labels[which]} ⚙"
+                    withController { try { it.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {} }
+                    try { speedBtn.text = "${labels[which]} ⚙" } catch (_: Exception) {}
                     toast("Speed: ${labels[which]}")
                     d.dismiss()
                 }
@@ -1052,13 +1124,18 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    /** Fullscreen/PiP me extra UI chhupao, wapas par dikhao. */
+    /** Fullscreen/PiP me extra UI chhupao, wapas par dikhao.
+     *  BUG-FIX: pehle control rows (Fullscreen/quality buttons) bhi chhup
+     *  jati thin — wapas aane ka button hi nahi milta tha. Ab video +
+     *  controls + quality pills fullscreen me bhi dikhengi (YouTube jaisa),
+     *  taaki play ke dauran quality badal sako aur Exit dabakar wapas aao. */
+    private var fsKeep: Set<Int> = emptySet()
     private fun applyChromeVisibility() {
         try {
             val hide = isFullscreen || isInPip
             for (i in 0 until playerRoot.childCount) {
                 val v = playerRoot.getChildAt(i)
-                if (v.id == R.id.playerFrame) {
+                if (v.id == R.id.playerFrame || fsKeep.contains(v.id)) {
                     v.visibility = View.VISIBLE
                     continue
                 }
@@ -1071,9 +1148,10 @@ class PlayerActivity : AppCompatActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         try {
-            if (Build.VERSION.SDK_INT >= 26 && exo != null &&
-                exo?.playbackState != Player.STATE_IDLE &&
-                exo?.playWhenReady == true
+            val c = controller
+            if (Build.VERSION.SDK_INT >= 26 && c != null &&
+                c.playbackState != Player.STATE_IDLE &&
+                c.playWhenReady
             ) {
                 val p = PictureInPictureParams.Builder()
                     .setAspectRatio(Rational(16, 9))
@@ -1097,23 +1175,8 @@ class PlayerActivity : AppCompatActivity() {
         return url + (if (url.contains("?")) "&" else "?") + "ratebypass=yes"
     }
 
-    private fun acquireWake() {
-        try {
-            if (wakeLock == null) {
-                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GSK:PlayerWake")
-                wakeLock?.setReferenceCounted(false)
-            }
-            if (wakeLock?.isHeld != true) wakeLock?.acquire(4 * 60 * 60 * 1000L)
-        } catch (_: Exception) {}
-    }
-
-    private fun releaseWake() {
-        try {
-            if (wakeLock?.isHeld == true) wakeLock?.release()
-        } catch (_: Exception) {}
-        wakeLock = null
-    }
+    // WakeLock ab service me hai (ExoPlayer WAKE_MODE_LOCAL) — yahan window
+    // flag (screen ON) hi kaafi hai.
 
     private fun findCookies(): String {
         return try {
@@ -1144,23 +1207,44 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    private fun releasePlayer() {
-        try { exo?.stop() } catch (_: Exception) {}
-        try { exo?.release() } catch (_: Exception) {}
-        exo = null
+    /** Activity band ho rahi hai — controller chhodo, lekin playback service
+     *  me chalta rahe (background + notification). Baj NA raha ho to service
+     *  bhi band karo (zombie service nahi). */
+    private fun releaseController() {
+        try { controller?.removeListener(ctrlListener) } catch (_: Exception) {}
         try { playerView.player = null } catch (_: Exception) {}
-        releaseWake()
+        try { controllerFuture?.let { MediaController.releaseFuture(it) } } catch (_: Exception) {}
+        controller = null
+        controllerFuture = null
+        try { pendingCtrl.clear() } catch (_: Exception) {}
     }
 
-    // NOTE: onPause me player rokna NAHI — screen off / Home (PiP) par
-    // background audio chalta rahe. Back dabane par onDestroy me band.
+    // NOTE: onPause me player rokna NAHI — screen off / Home (PiP) / Back par
+    // background audio service me chalta rahe. Stop = notification se.
 
     override fun onDestroy() {
         try { WatchDownloader.cancel("wv") } catch (_: Exception) {}
         try { WatchDownloader.cancel("wa") } catch (_: Exception) {}
         try { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } catch (_: Exception) {}
         try { showSystemBars() } catch (_: Exception) {}
-        releasePlayer()
+        try {
+            val c = controller
+            val playing = try {
+                c != null && c.playWhenReady &&
+                    (c.playbackState == Player.STATE_BUFFERING || c.playbackState == Player.STATE_READY)
+            } catch (_: Exception) { false }
+            if (!playing) {
+                // Kuch baj nahi raha — idle service ko band karo.
+                try {
+                    startService(Intent(this, PlayerService::class.java).setAction(PlayerService.ACTION_CLOSE))
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+        try {
+            PlayerService.externalNext = null
+            PlayerService.externalPrev = null
+        } catch (_: Exception) {}
+        releaseController()
         super.onDestroy()
     }
 }

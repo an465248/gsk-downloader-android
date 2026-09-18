@@ -86,8 +86,9 @@
         android:textColor="@color/mut"
         android:textSize="12sp" />
 
-    <!-- Quality pills (jo chal raha hai wahi save hoga) + 1-tap download -->
+    <!-- Quality pills (play ke dauran bhi — fullscreen me bhi dikhengi) -->
     <HorizontalScrollView
+        android:id="@+id/playerQPillsScroll"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
@@ -101,6 +102,7 @@
     </HorizontalScrollView>
 
     <LinearLayout
+        android:id="@+id/playerCtrlRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
@@ -141,6 +143,7 @@
     </LinearLayout>
 
     <LinearLayout
+        android:id="@+id/playerDlRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"

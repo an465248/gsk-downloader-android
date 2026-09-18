@@ -63,6 +63,12 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
+        <!-- Ad-Free Player (v1.9): sidebar se khulta full player, Up-Next auto-play -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
         <!-- Background download service: notification bar progress + app background me bhi zinda -->
         <service
             android:name=".GskDownloadService"

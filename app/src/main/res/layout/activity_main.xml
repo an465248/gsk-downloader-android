@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/drawerLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg">
+
+<ScrollView
+    android:id="@+id/mainScroll"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg"
@@ -18,9 +25,20 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
+        <Button
+            android:id="@+id/menuBtn"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@drawable/bg_card"
+            android:minWidth="0dp"
+            android:text="☰"
+            android:textColor="@color/txt"
+            android:textSize="20sp" />
+
         <ImageView
             android:layout_width="52dp"
             android:layout_height="52dp"
+            android:layout_marginStart="8dp"
             android:contentDescription="GSK logo"
             android:src="@drawable/logo" />
 
@@ -390,6 +408,16 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/fullPlayerBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_btn"
+            android:text="⛶  Full Player me kholo (Ad-Free 🚫)"
+            android:textColor="#04070F"
+            android:textStyle="bold" />
+
         <!-- ===== Up Next: playlist / channel videos — tap karo, link copy nahi ===== -->
         <TextView
             android:id="@+id/upNextTitle"
@@ -648,3 +676,77 @@
         android:textSize="11sp" />
 </LinearLayout>
 </ScrollView>
+
+<!-- ===== SIDEBAR (drawer): Downloader / Ad-Free Player / Recent / Share / About ===== -->
+<LinearLayout
+    android:id="@+id/drawerPanel"
+    android:layout_width="280dp"
+    android:layout_height="match_parent"
+    android:layout_gravity="start"
+    android:background="@color/bg"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="☰  GSK Menu"
+        android:textColor="@color/txt"
+        android:textSize="20sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:layout_marginBottom="10dp"
+        android:text="v1.9 • ad-free player ke saath"
+        android:textColor="@color/mut"
+        android:textSize="12sp" />
+
+    <Button
+        android:id="@+id/drawerDownload"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_btn"
+        android:text="⬇  Downloader"
+        android:textColor="#04070F"
+        android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/drawerPlayer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_card"
+        android:text="▶  Ad-Free Player 🚫"
+        android:textColor="@color/txt" />
+
+    <Button
+        android:id="@+id/drawerRecent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_card"
+        android:text="🕘  Recent"
+        android:textColor="@color/txt" />
+
+    <Button
+        android:id="@+id/drawerShare"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_card"
+        android:text="📤  App Share Karo"
+        android:textColor="@color/txt" />
+
+    <Button
+        android:id="@+id/drawerAbout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_card"
+        android:text="ℹ  About"
+        android:textColor="@color/txt" />
+</LinearLayout>
+</androidx.drawerlayout.widget.DrawerLayout>

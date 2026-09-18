@@ -29,6 +29,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -37,6 +38,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.GravityCompat
+import androidx.drawerlayout.widget.DrawerLayout
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -248,6 +251,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var metaText: TextView
     private lateinit var recycler: RecyclerView
     private lateinit var adapter: FormatAdapter
+    // Sidebar (drawer) v1.9
+    private lateinit var drawerLayout: DrawerLayout
+    private lateinit var mainScroll: ScrollView
     private val qPills = HashMap<String, Button>()
     // preview views
     private lateinit var previewCard: LinearLayout
@@ -420,6 +426,44 @@ class MainActivity : AppCompatActivity() {
         // Recent header buttons: ✕ Band (hide) + 🗑 Clear (sab delete)
         recentCloseBtn.setOnClickListener { closeRecent() }
         recentClearBtn.setOnClickListener { clearRecent() }
+        // ===== SIDEBAR (v1.9): hamburger + drawer menu =====
+        drawerLayout = findViewById(R.id.drawerLayout)
+        mainScroll = findViewById(R.id.mainScroll)
+        findViewById<Button>(R.id.menuBtn).setOnClickListener {
+            try { drawerLayout.openDrawer(GravityCompat.START) } catch (_: Exception) {}
+        }
+        findViewById<Button>(R.id.drawerDownload).setOnClickListener {
+            try { drawerLayout.closeDrawers() } catch (_: Exception) {}
+            try { mainScroll.post { mainScroll.smoothScrollTo(0, 0) } } catch (_: Exception) {}
+        }
+        findViewById<Button>(R.id.drawerPlayer).setOnClickListener {
+            try { drawerLayout.closeDrawers() } catch (_: Exception) {}
+            openPlayer()
+        }
+        findViewById<Button>(R.id.drawerRecent).setOnClickListener {
+            try { drawerLayout.closeDrawers() } catch (_: Exception) {}
+            try {
+                if (loadRecentList().isEmpty()) {
+                    toast("Recent khaali hai — pehle koi video kholo.")
+                } else {
+                    if (recentHidden) {
+                        recentHidden = false
+                        getSharedPreferences("gsk_recent", MODE_PRIVATE).edit()
+                            .putBoolean("hidden", false).apply()
+                        renderRecent()
+                    }
+                    mainScroll.post { mainScroll.smoothScrollTo(0, recentHeader.top) }
+                }
+            } catch (_: Exception) {}
+        }
+        findViewById<Button>(R.id.drawerShare).setOnClickListener {
+            try { drawerLayout.closeDrawers() } catch (_: Exception) {}
+            shareApp()
+        }
+        findViewById<Button>(R.id.drawerAbout).setOnClickListener {
+            try { drawerLayout.closeDrawers() } catch (_: Exception) {}
+            showAbout()
+        }
 
         adapter = FormatAdapter(
             onDownload = { fmt, key -> onFormatClick(fmt, key) },
@@ -497,6 +541,10 @@ class MainActivity : AppCompatActivity() {
         stylePills()
 
         previewPlayBtn.setOnClickListener { playPreview() }
+        // v1.9: preview ko full Ad-Free Player me kholo (sidebar player)
+        try {
+            findViewById<Button>(R.id.fullPlayerBtn).setOnClickListener { openPlayer() }
+        } catch (_: Exception) {}
         // 10s skip: user preview me aage-peeche kar sake
         previewBackBtn.setOnClickListener { seekPreviewBy(-10_000) }
         previewFwdBtn.setOnClickListener { seekPreviewBy(10_000) }
@@ -520,7 +568,7 @@ class MainActivity : AppCompatActivity() {
         setupFaq(R.id.fq5, R.id.fa5)
         try {
             val ft: TextView = findViewById(R.id.footerText)
-            ft.text = "© 2026 LVIGS Pvt. Ltd. • v1.8\n🇮🇳 India • English • INR"
+            ft.text = "© 2026 LVIGS Pvt. Ltd. • v1.9\n🇮🇳 India • English • INR"
         } catch (_: Exception) {}
     }
 
@@ -1248,6 +1296,55 @@ class MainActivity : AppCompatActivity() {
         previewPlayBtn.visibility = View.VISIBLE
         previewPlayBtn.text = "▶ Preview"
         previewPlayBtn.setOnClickListener { playPreview() }
+    }
+
+    // ---------------- AD-FREE PLAYER (v1.9, sidebar) ----------------
+    /** Current video (+ Up-Next queue) Full Player me kholo.
+     *  Link na ho to khaali player khulta hai (wahan link paste karke bajao). */
+    private fun openPlayer() {
+        try {
+            val i = Intent(this, PlayerActivity::class.java)
+            val arr = org.json.JSONArray()
+            if (lastPageUrl.isNotEmpty()) {
+                arr.put(org.json.JSONObject().put("t", videoTitle).put("u", lastPageUrl))
+            }
+            for (item in upNextList) {
+                if (item.url.isNotEmpty()) {
+                    arr.put(org.json.JSONObject().put("t", item.title).put("u", item.url))
+                }
+            }
+            i.putExtra(PlayerActivity.EXTRA_QUEUE, arr.toString())
+            i.putExtra(PlayerActivity.EXTRA_PAGE_URL, lastPageUrl)
+            i.putExtra(PlayerActivity.EXTRA_TITLE, videoTitle)
+            i.putExtra(PlayerActivity.EXTRA_STREAM, previewUrl)
+            i.putExtra(PlayerActivity.EXTRA_AUDIO, (bestAudioMp4 ?: bestAudio)?.url.orEmpty())
+            i.putExtra(PlayerActivity.EXTRA_HAS_AUDIO, previewHasAudio)
+            i.putExtra(PlayerActivity.EXTRA_THUMB, videoThumb)
+            startActivity(i)
+        } catch (e: Exception) { toast("Player nahi khul paya: ${e.message}") }
+    }
+
+    /** App share karo (dosto ko GitHub release link bhejo). */
+    private fun shareApp() {
+        try {
+            val txt = "GSK Downloader try karo — YouTube/IG/FB videos download + Ad-Free Player! 🚫📥\nhttps://github.com/an465248/gsk-downloader/releases"
+            val i = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, txt)
+            }
+            startActivity(Intent.createChooser(i, "GSK App share karo"))
+        } catch (e: Exception) { toast("Share nahi ho paya: ${e.message}") }
+    }
+
+    /** About dialog (sidebar). */
+    private fun showAbout() {
+        try {
+            AlertDialog.Builder(this)
+                .setTitle("ℹ GSK Downloader v1.9")
+                .setMessage("YouTube, Instagram, Facebook + 1600 sites se download.\n\n★ NAYA: ☰ Sidebar me Ad-Free Player — direct stream bajta hai, isliye ZERO ads.\n\n© 2026 LVIGS Pvt. Ltd. 🇮🇳")
+                .setPositiveButton("OK", null)
+                .show()
+        } catch (_: Exception) {}
     }
 
     private fun releasePreview() {

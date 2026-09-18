@@ -89,6 +89,17 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
+    override fun onDestroy() {
+        // BUG-FIX: WebView destroy nahi hota tha — memory leak + audio chalta rehta tha.
+        try {
+            web.stopLoading()
+            web.loadUrl("about:blank")
+            web.removeAllViews()
+            web.destroy()
+        } catch (_: Exception) {}
+        super.onDestroy()
+    }
+
     /** WebView cookies -> Netscape cookies.txt me merge karke save karo.
      *  Returns true agar kam se kam 1 session cookie mili. */
     private fun saveCookies(homeHint: String): Boolean {
@@ -136,7 +147,6 @@ class LoginActivity : AppCompatActivity() {
                         val isOurs = domains.any { dom.endsWith(it.lowercase()) }
                         if (!isOurs) {
                             // doosre site ki cookie — bachao (dup se bacho)
-                            val key = dom + "|" + cols[5]
                             if (lines.none { it.contains("\t" + cols[5] + "\t") && it.startsWith(dom) }) {
                                 lines.add(ln)
                             }

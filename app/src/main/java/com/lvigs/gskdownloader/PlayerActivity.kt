@@ -236,9 +236,15 @@ class PlayerActivity : AppCompatActivity() {
                         WatchRepository.extract(page, cookiePath) { res ->
                             res.onSuccess { data ->
                                 runOnUiThread {
+                                    if (isFinishing || isDestroyed) return@runOnUiThread
                                     curData = data
-                                    if (queue.isEmpty() && data.related.isNotEmpty()) {
-                                        queue = listOf(VideoItem("", data.title, data.pageUrl, "", 0)) + data.related
+                                    // BUG-FIX: intent queue me thumbs nahi hote
+                                    // (kala dabba dikhta tha) — related me thumbs
+                                    // hon to wahi dikhao (current sabse upar).
+                                    if (data.related.isNotEmpty() &&
+                                        (queue.isEmpty() || queue.all { it.thumb.isEmpty() })
+                                    ) {
+                                        queue = listOf(VideoItem("", data.title, data.pageUrl, data.thumb, 0)) + data.related
                                         qIndex = 0
                                         renderQueue()
                                     }
@@ -340,15 +346,19 @@ class PlayerActivity : AppCompatActivity() {
     // ---------------- SEARCH (results + pagination) ----------------
     private fun doSearch(query: String) {
         if (!pyReady) { toast("Engine taiyaar ho raha hai, ruk jao."); return }
-        if (loadingBusy) return
+        // BUG-FIX: extract chalte time search dabane par chup-chaap kuch
+        // nahi hota tha — wajah batao.
+        if (loadingBusy) { toast("Ruko — video load ho raha hai..."); return }
         loadingBusy = true
         goBtn.isEnabled = false
         lastQuery = query
         status("Search ho raha: $query ...")
         WatchRepository.search(query, searchLimit) { res ->
             runOnUiThread {
+                // BUG-FIX: beech me Back dabane par dead-views ko chhuna = crash.
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 loadingBusy = false
-                goBtn.isEnabled = true
+                try { goBtn.isEnabled = true } catch (_: Exception) {}
                 res.onSuccess { list ->
                     searchResults = list
                     renderSearch(list)
@@ -564,7 +574,9 @@ class PlayerActivity : AppCompatActivity() {
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val u = o.optString("u")
-                if (u.isNotEmpty()) out.add(VideoItem("", o.optString("t", "Video"), u, "", 0))
+                if (u.isNotEmpty()) out.add(VideoItem(
+                    o.optString("id"), o.optString("t", "Video"), u,
+                    o.optString("h"), 0))
             }
             queue = out
         } catch (_: Exception) { queue = emptyList() }
@@ -600,14 +612,15 @@ class PlayerActivity : AppCompatActivity() {
     // ---------------- EXTRACT + PLAY ----------------
     private fun extractAndPlay(pageUrl: String, freshQueue: Boolean) {
         if (!pyReady) { toast("Engine taiyaar ho raha hai, ruk jao."); return }
-        if (loadingBusy) return
+        if (loadingBusy) { toast("Ruko — pichla load ho raha hai..."); return }
         loadingBusy = true
         goBtn.isEnabled = false
         status("Ad-free link nikal rahe hain...")
         WatchRepository.extract(pageUrl, cookiePath) { res ->
             runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 loadingBusy = false
-                goBtn.isEnabled = true
+                try { goBtn.isEnabled = true } catch (_: Exception) {}
                 res.onSuccess { data -> onWatchData(data, freshQueue) }
                     .onFailure { e -> status("Error: ${(e.message ?: "").take(120)}") }
             }
@@ -623,7 +636,9 @@ class PlayerActivity : AppCompatActivity() {
             queue = listOf(VideoItem("", data.title, data.pageUrl, data.thumb, 0)) + data.related
             qIndex = 0
         } else if (freshQueue && data.related.size > 1) {
-            queue = data.related
+            // BUG-FIX: current ko sabse upar rakho (pehle qIndex=0
+            // related ke pehle item par tha, current gayab tha).
+            queue = listOf(VideoItem("", data.title, data.pageUrl, data.thumb, 0)) + data.related
             qIndex = 0
         }
         setQOpts(buildQOpts(data.extractJson), 0)
@@ -674,14 +689,12 @@ class PlayerActivity : AppCompatActivity() {
                     if (f.optBoolean("progressive")) {
                         if (!progByH.containsKey(h)) progByH[h] = u
                     } else {
-                        // AVC prefer (smooth), warna jo mile
-                        val v = f.optString("vcodec", "").lowercase()
-                        val cur = dashByH[h]
-                        if (cur == null) dashByH[h] = u
+                        if (!dashByH.containsKey(h)) dashByH[h] = u
                     }
                 } catch (_: Exception) {}
             }
             val heights = (progByH.keys + dashByH.keys).distinct().sortedDescending().take(6)
+            val dashNoAudio = ArrayList<Pair<Int, String>>()
             for ((idx, h) in heights.withIndex()) {
                 val pu = progByH[h]
                 if (!pu.isNullOrEmpty()) {
@@ -689,14 +702,22 @@ class PlayerActivity : AppCompatActivity() {
                 } else {
                     val du = dashByH[h].orEmpty()
                     if (du.isNotEmpty()) {
-                        // video-only + audio merge = awaaz-sahit play
-                        val hasA = audioUrl.isNotEmpty()
-                        out.add(QOpt(
-                            if (idx == 0) "BEST ${h}p" else "${h}p",
-                            du, if (hasA) audioUrl else "", hasA,
-                        ))
+                        if (audioUrl.isNotEmpty()) {
+                            // video-only + audio merge = awaaz-sahit play
+                            out.add(QOpt(
+                                if (idx == 0) "BEST ${h}p" else "${h}p",
+                                du, audioUrl, false,
+                            ))
+                        } else {
+                            // BUG-FIX: bina-audio dash pill dabane par silent
+                            // play hota tha — ise aakhri option rakho.
+                            dashNoAudio.add(h to du)
+                        }
                     }
                 }
+            }
+            if (out.isEmpty()) {
+                for ((h, du) in dashNoAudio) out.add(QOpt("${h}p 🔇", du, "", false))
             }
             if (audioOnly.isNotEmpty()) out.add(QOpt("🎵 Audio", audioOnly, "", true))
         } catch (_: Exception) {}
@@ -1107,11 +1128,20 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun status(s: String) {
-        runOnUiThread { statusText.text = s }
+        try {
+            if (isFinishing || isDestroyed) return
+            runOnUiThread { try { statusText.text = s } catch (_: Exception) {} }
+        } catch (_: Exception) {}
     }
 
     private fun toast(s: String) {
-        runOnUiThread { Toast.makeText(this, s, Toast.LENGTH_SHORT).show() }
+        // BUG-FIX: dead activity par Toast = BadToken crash. Guard lagao.
+        try {
+            if (isFinishing || isDestroyed) return
+            runOnUiThread {
+                try { Toast.makeText(this, s, Toast.LENGTH_SHORT).show() } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
     }
 
     private fun releasePlayer() {

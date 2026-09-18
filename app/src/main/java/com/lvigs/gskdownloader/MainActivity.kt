@@ -588,7 +588,7 @@ class MainActivity : AppCompatActivity() {
         setupFaq(R.id.fq5, R.id.fa5)
         try {
             val ft: TextView = findViewById(R.id.footerText)
-            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.3\n🇮🇳 India • English • INR"
+            ft.text = "© 2026 LVIGS Pvt. Ltd. • v2.4\n🇮🇳 India • English • INR"
         } catch (_: Exception) {}
     }
 
@@ -1051,11 +1051,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun status(s: String) {
-        runOnUiThread { statusText.text = s }
+        try {
+            if (isFinishing || isDestroyed) return
+            runOnUiThread { try { statusText.text = s } catch (_: Exception) {} }
+        } catch (_: Exception) {}
     }
 
     private fun toast(s: String) {
-        runOnUiThread { Toast.makeText(this, s, Toast.LENGTH_SHORT).show() }
+        // BUG-FIX: dead activity par Toast/views = crash. Guard lagao.
+        try {
+            if (isFinishing || isDestroyed) return
+            runOnUiThread {
+                try { Toast.makeText(this, s, Toast.LENGTH_SHORT).show() } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
     }
 
     // ---------------- EXTRACT (user ke IP/network se, phone par) ----------------
@@ -1383,11 +1392,12 @@ class MainActivity : AppCompatActivity() {
             val i = Intent(this, PlayerActivity::class.java)
             val arr = org.json.JSONArray()
             if (lastPageUrl.isNotEmpty()) {
-                arr.put(org.json.JSONObject().put("t", videoTitle).put("u", lastPageUrl))
+                // BUG-FIX: thumb bhi bhejo — Player me kala dabba nahi, thumbnail dikhega.
+                arr.put(org.json.JSONObject().put("t", videoTitle).put("u", lastPageUrl).put("h", videoThumb))
             }
             for (item in upNextList) {
                 if (item.url.isNotEmpty()) {
-                    arr.put(org.json.JSONObject().put("t", item.title).put("u", item.url))
+                    arr.put(org.json.JSONObject().put("t", item.title).put("u", item.url).put("h", item.thumb))
                 }
             }
             i.putExtra(PlayerActivity.EXTRA_QUEUE, arr.toString())
@@ -1417,7 +1427,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAbout() {
         try {
             AlertDialog.Builder(this)
-                .setTitle("ℹ GSK Downloader v2.3")
+                .setTitle("ℹ GSK Downloader v2.4")
                 .setMessage("YouTube, Instagram, Facebook + 1600 sites se download.\n\n★ WATCH: ☰ Sidebar me search + ad-free play + related videos + 1-tap download.\n★ Screen off par bhi audio chalta rehta hai.\n\n© 2026 LVIGS Pvt. Ltd. 🇮🇳")
                 .setPositiveButton("OK", null)
                 .show()

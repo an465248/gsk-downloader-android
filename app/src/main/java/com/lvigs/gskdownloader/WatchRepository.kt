@@ -43,33 +43,70 @@ object WatchRepository {
     }
 
     fun search(query: String, limit: Int, cb: (Result<List<VideoItem>>) -> Unit) {
-        Thread {
+        // LIVE-FIX: search me bhi timeout — warna loadingBusy true atka rehta
+        // aur uske baad Ad-free fetch "Ruko — video load ho raha" par atak jata.
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun once(r: Result<List<VideoItem>>) {
+            if (done.compareAndSet(false, true)) {
+                try { cb(r) } catch (_: Exception) {}
+            }
+        }
+        val exec = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val fut: java.util.concurrent.Future<*> = exec.submit {
             try {
                 val o = JSONObject(
                     Python.getInstance().getModule("gsk")
                         .callAttr("search", query, limit).toString()
                 )
                 if (o.has("error")) {
-                    cb(Result.failure(Exception(o.optString("error"))))
-                    return@Thread
+                    once(Result.failure(Exception(o.optString("error"))))
+                    return@submit
                 }
-                cb(Result.success(parseItems(o.optJSONArray("results"))))
+                once(Result.success(parseItems(o.optJSONArray("results"))))
             } catch (e: Exception) {
-                cb(Result.failure(e))
+                once(Result.failure(e))
+            } finally {
+                try { exec.shutdown() } catch (_: Exception) {}
             }
+        }
+        Thread {
+            try {
+                fut.get(45, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (te: java.util.concurrent.TimeoutException) {
+                try { fut.cancel(true) } catch (_: Exception) {}
+                try { exec.shutdownNow() } catch (_: Exception) {}
+                once(Result.failure(Exception("Search me 45s lag gaya — net check karke dobara try karo.")))
+            } catch (_: Exception) {}
         }.start()
     }
 
     fun extract(pageUrl: String, cookiePath: String, cb: (Result<WatchData>) -> Unit) {
-        Thread {
+        extractInternal(pageUrl, cookiePath, fast = 1, cb = cb)
+    }
+
+    /** fast=1: Watch (ad-free play) — 6-10s target, no related/probe.
+     *  fast=0: poora (related + probe) — Download tab ke liye. */
+    fun extractInternal(pageUrl: String, cookiePath: String, fast: Int,
+                        cb: (Result<WatchData>) -> Unit) {
+        // 30-MIN HANG FIX: pehle timeout nahi tha + probe-executor wait=True me
+        // atka rehta tha. Ab fast-mode (related/probe skip) + 30s hard-timeout:
+        // user ko 30s me jawab pakka — success ya dobara-dabao error.
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun once(r: Result<WatchData>) {
+            if (done.compareAndSet(false, true)) {
+                try { cb(r) } catch (_: Exception) {}
+            }
+        }
+        val exec = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val fut: java.util.concurrent.Future<*> = exec.submit {
             try {
                 val o = JSONObject(
                     Python.getInstance().getModule("gsk")
-                        .callAttr("extract", pageUrl, cookiePath).toString()
+                        .callAttr("extract", pageUrl, cookiePath, fast).toString()
                 )
                 if (o.has("error")) {
-                    cb(Result.failure(Exception(o.optString("error"))))
-                    return@Thread
+                    once(Result.failure(Exception(o.optString("error"))))
+                    return@submit
                 }
                 var stream = o.optString("preview_url", "")
                 var hasAudio = o.optBoolean("preview_has_audio", false)
@@ -99,10 +136,10 @@ object WatchRepository {
                     }
                 } catch (_: Exception) {}
                 if (stream.isEmpty()) {
-                    cb(Result.failure(Exception("Is link ka playable stream nahi mila.")))
-                    return@Thread
+                    once(Result.failure(Exception("Is link ka playable stream nahi mila.")))
+                    return@submit
                 }
-                cb(Result.success(WatchData(
+                once(Result.success(WatchData(
                     title = title,
                     pageUrl = o.optString("webpage_url", pageUrl).ifEmpty { pageUrl },
                     thumb = o.optString("thumbnail", ""),
@@ -113,7 +150,22 @@ object WatchRepository {
                     related = parseItems(o.optJSONArray("playlist")),
                 )))
             } catch (e: Exception) {
-                cb(Result.failure(e))
+                once(Result.failure(e))
+            } finally {
+                try { exec.shutdown() } catch (_: Exception) {}
+            }
+        }
+        // Watchdog: 30s me Python jawab na de to timeout-error pakka.
+        // (60s bahut lamba — user 30s me dobara try kare, wahi pasand karega.)
+        Thread {
+            try {
+                fut.get(30, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (te: java.util.concurrent.TimeoutException) {
+                try { fut.cancel(true) } catch (_: Exception) {}
+                try { exec.shutdownNow() } catch (_: Exception) {}
+                once(Result.failure(Exception("Site ne 30s me jawab nahi diya — net check karke dobara Play dabao.")))
+            } catch (_: Exception) {
+                // success / failure already `once()` se bhej di — kuch mat karo.
             }
         }.start()
     }

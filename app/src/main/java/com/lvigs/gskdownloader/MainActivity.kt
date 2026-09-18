@@ -334,7 +334,10 @@ class MainActivity : AppCompatActivity() {
     // executor banane se purani atki search ka thread leak hota tha — agli search
     // uske peeche queue ho jati thi = "bas scanning hota rehta, kuch nahi".
     // Ab nayi search purani ko cancel karke turant chalti hai (max 1 stale thread).
-    private val extractExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    // LIVE-FIX ("fetch par atka"): singleThread me purana atka extract naye ko
+    // queue me rok deta tha (75s + purana = 2-3 min stuck). Cached-pool me naya
+    // extract turant parallel chalta hai — purana background me khud marega.
+    private val extractExec = java.util.concurrent.Executors.newCachedThreadPool()
     @Volatile private var extractFuture: java.util.concurrent.Future<String>? = null
 
     private val http = OkHttpClient.Builder()
@@ -1097,18 +1100,19 @@ class MainActivity : AppCompatActivity() {
             try {
                 val py = Python.getInstance()
                 // Purani atki search ho to use cancel karke nayi turant chalao.
-                // (Shared single-thread executor: max 1 stale thread, leak nahi.)
+                // (Cached-pool: naya parallel chalta hai, purana background me marega.)
                 try { extractFuture?.cancel(true) } catch (_: Exception) {}
-                // gsk.py ab fast-fail hai (~60s worst-case), isliye 75s kaafi hai.
+                // gsk.py fast-fail + probe non-blocking: worst ~30s. 45s cap —
+                // user 30-min wait nahi karega, 45s me dobara-try clear milega.
                 val fut = extractExec.submit<String> {
-                    py.getModule("gsk").callAttr("extract", url, cookiePath).toString()
+                    py.getModule("gsk").callAttr("extract", url, cookiePath, 0).toString()
                 }
                 extractFuture = fut
                 val json: String = try {
-                    fut.get(75, java.util.concurrent.TimeUnit.SECONDS)
+                    fut.get(45, java.util.concurrent.TimeUnit.SECONDS)
                 } catch (te: java.util.concurrent.TimeoutException) {
                     try { fut.cancel(true) } catch (_: Exception) {}
-                    status("Site ne 75s me jawab nahi diya — net check karke dobara Get Video dabao.")
+                    status("Site ne 45s me jawab nahi diya — net check karke dobara Get Video dabao.")
                     toast("Timeout: koi response nahi. Dobara try karo.")
                     return@Thread
                 } catch (ce: java.util.concurrent.CancellationException) {

@@ -41,8 +41,10 @@ import androidx.media3.session.SessionToken
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.google.common.util.concurrent.ListenableFuture
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -64,6 +66,7 @@ class PlayerActivity : AppCompatActivity() {
         const val EXTRA_THUMB = "thumb"
         const val EXTRA_QUEUE = "queue_json" // [{"t":title,"u":pageUrl}]
         const val EXTRA_AUTODL = "autodl_url" // MainActivity ke liye
+        const val DEFAULT_SERVER_URL = "https://gsk-downloader.onrender.com"
         private const val UA =
             "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
     }
@@ -104,6 +107,8 @@ class PlayerActivity : AppCompatActivity() {
     private var queue: List<VideoItem> = emptyList()
     private var qIndex: Int = -1
     private var loadingBusy = false
+    // WATCHDOG: callback kho jaye to bhi UI 35s me free pakka (30s repo + 5s).
+    @Volatile private var loadSeq = 0
 
     private data class QOpt(val label: String, val url: String, val audioUrl: String, val hasAudio: Boolean)
     private var qOpts: List<QOpt> = emptyList()
@@ -738,17 +743,123 @@ class PlayerActivity : AppCompatActivity() {
         if (!pyReady) { toast("Engine taiyaar ho raha hai, ruk jao."); return }
         if (loadingBusy) { toast("Ruko — pichla load ho raha hai..."); return }
         loadingBusy = true
+        loadSeq++
+        val myLoad = loadSeq
         goBtn.isEnabled = false
-        status("Ad-free link nikal rahe hain...")
+        status("Ad-free link nikal rahe hain... (10-15s)")
+        // WATCHDOG: 35s me callback na aaye to khud free — "fetch par atka" band.
+        try {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    if (loadingBusy && myLoad == loadSeq && !isFinishing && !isDestroyed) {
+                        loadingBusy = false
+                        try { goBtn.isEnabled = true } catch (_: Exception) {}
+                        status("Time-out: link nahi nikla — net check karke dobara Play dabao.")
+                    }
+                } catch (_: Exception) {}
+            }, 35000)
+        } catch (_: Exception) {}
         WatchRepository.extract(pageUrl, cookiePath) { res ->
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                loadingBusy = false
-                try { goBtn.isEnabled = true } catch (_: Exception) {}
-                res.onSuccess { data -> onWatchData(data, freshQueue) }
-                    .onFailure { e -> status("Error: ${(e.message ?: "").take(120)}") }
+                // Purana stale callback naye load ko free na kare.
+                if (myLoad != loadSeq) return@runOnUiThread
+                res.onSuccess { data -> 
+                    loadingBusy = false
+                    try { goBtn.isEnabled = true } catch (_: Exception) {}
+                    onWatchData(data, freshQueue) 
+                }
+                .onFailure { e ->
+                    val msg = (e.message ?: "").take(120)
+                    // SERVER-FALLBACK: phone slow/wall ho to server se nikalo
+                    // (admin cookies se IG bhi bina-login). Download phir bhi phone par.
+                    if (getServerBase().isNotEmpty() && myLoad == loadSeq) {
+                        status("Phone se slow — server se try... ")
+                        Thread {
+                            val sd = fetchWatchViaServer(pageUrl)
+                            runOnUiThread {
+                                if (isFinishing || isDestroyed) return@runOnUiThread
+                                if (myLoad != loadSeq) return@runOnUiThread
+                                loadingBusy = false
+                                try { goBtn.isEnabled = true } catch (_: Exception) {}
+                                if (sd != null) onWatchData(sd, freshQueue)
+                                else status("Error: $msg")
+                            }
+                        }.start()
+                    } else {
+                        loadingBusy = false
+                        try { goBtn.isEnabled = true } catch (_: Exception) {}
+                        status("Error: $msg")
+                    }
+                }
             }
         }
+    }
+
+    private fun getServerBase(): String {
+        return try {
+            val s = getSharedPreferences("gsk_settings", MODE_PRIVATE)
+                .getString("server_url", "")?.trim().orEmpty().trimEnd('/')
+            if (s.isNotEmpty()) s else DEFAULT_SERVER_URL.trimEnd('/')
+        } catch (_: Exception) { DEFAULT_SERVER_URL.trimEnd('/') }
+    }
+
+    /** Server /api/extract -> WatchData (phone slow ho to fallback). null = fail. */
+    private fun fetchWatchViaServer(pageUrl: String): WatchData? {
+        return try {
+            val base = getServerBase()
+            if (base.isEmpty()) return null
+            val payload = JSONObject().put("url", pageUrl).toString()
+            val req = Request.Builder()
+                .url("$base/api/extract")
+                .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .header("User-Agent", UA)
+                .build()
+            // short-timeout client: server 25s me na de to phone-error dikhao.
+            val cli = OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(25, TimeUnit.SECONDS)
+                .writeTimeout(10, TimeUnit.SECONDS)
+                .build()
+            cli.newCall(req).execute().use { res ->
+                val txt = res.body?.string() ?: return null
+                if (txt.isEmpty()) return null
+                val o = JSONObject(txt)
+                if (o.has("error")) return null
+                var stream = o.optString("preview_url", "")
+                var hasAudio = o.optBoolean("preview_has_audio", false)
+                var audioUrl = ""
+                try {
+                    audioUrl = o.optJSONObject("best_audio_mp4")?.optString("url", "").orEmpty()
+                    if (audioUrl.isEmpty()) audioUrl = o.optJSONObject("best_audio")?.optString("url", "").orEmpty()
+                    if (stream.isEmpty()) {
+                        val arr = o.optJSONArray("formats") ?: return null
+                        var best: JSONObject? = null
+                        for (i in 0 until arr.length()) {
+                            val f = arr.getJSONObject(i)
+                            if (f.optString("type") != "video" || f.optString("url", "").isEmpty()) continue
+                            if (f.optBoolean("progressive")) { best = f; break }
+                            if (best == null) best = f
+                        }
+                        if (best != null) {
+                            stream = best.optString("url", "")
+                            hasAudio = best.optBoolean("progressive")
+                        }
+                    }
+                } catch (_: Exception) {}
+                if (stream.isEmpty()) return null
+                WatchData(
+                    title = o.optString("title", "Video").ifEmpty { "Video" },
+                    pageUrl = o.optString("webpage_url", pageUrl).ifEmpty { pageUrl },
+                    thumb = o.optString("thumbnail", ""),
+                    streamUrl = stream,
+                    audioUrl = audioUrl,
+                    hasAudio = hasAudio,
+                    extractJson = o,
+                    related = WatchRepository.parseItems(o.optJSONArray("playlist")),
+                )
+            }
+        } catch (_: Exception) { null }
     }
 
     private fun onWatchData(data: WatchData, freshQueue: Boolean) {

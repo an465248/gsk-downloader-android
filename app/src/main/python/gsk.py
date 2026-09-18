@@ -217,40 +217,45 @@ def _fill_missing_heights(formats, limit=6):
                 pass
             continue
     if targets:
+        # 30-MIN HANG FIX: `with ThreadPoolExecutor` exit par wait=True karke
+        # atke probe threads ke peeche 30 min ruk jata tha (fut.result timeout
+        # ke baad bhi). Ab shutdown(wait=False) — 4s me jo mila wahi, baaki
+        # threads background me khud marenge, main video kabhi nahi rukega.
+        ex = None
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-                futs = {ex.submit(_probe_mp4_tracks, (c.get("url") or ""), 5): (c, nd)
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+            futs = {ex.submit(_probe_mp4_tracks, (c.get("url") or ""), 3): (c, nd)
                         for c, nd in targets}
-                for fut, (c, need_dims) in futs.items():
+            for fut, (c, need_dims) in futs.items():
+                try:
+                    d = fut.result(timeout=4)
+                except Exception:
+                    d = None
+                try:
+                    if d:
+                        w, h, ha = d
+                        if need_dims and w and h and min(w, h) > 0:
+                            c["height"] = min(w, h)
+                            c["label"] = "%dp" % min(w, h)
+                        # Video-only CONFIRM = HAMESHA merge-path (IG silent fix).
+                        # Alag audio ho to merge, na ho to downloader fallback
+                        # best 1-Tap dega — silent file kabhi nahi milegi.
+                        if c.pop("_verify_audio", None):
+                            if ha is False:
+                                c["progressive"] = False
+                                c["needs_merge"] = True
+                                c["one_tap"] = False
+                                if not has_any_audio:
+                                    c["label"] = (c.get("label") or "") + " (audio-merge)"
+                    else:
+                        c.pop("_verify_audio", None)
+                    c.pop("_guessed", None)
+                except Exception:
                     try:
-                        d = fut.result(timeout=6)
-                    except Exception:
-                        d = None
-                    try:
-                        if d:
-                            w, h, ha = d
-                            if need_dims and w and h and min(w, h) > 0:
-                                c["height"] = min(w, h)
-                                c["label"] = "%dp" % min(w, h)
-                            # Video-only CONFIRM = HAMESHA merge-path (IG silent fix).
-                            # Alag audio ho to merge, na ho to downloader fallback
-                            # best 1-Tap dega — silent file kabhi nahi milegi.
-                            if c.pop("_verify_audio", None):
-                                if ha is False:
-                                    c["progressive"] = False
-                                    c["needs_merge"] = True
-                                    c["one_tap"] = False
-                                    if not has_any_audio:
-                                        c["label"] = (c.get("label") or "") + " (audio-merge)"
-                        else:
-                            c.pop("_verify_audio", None)
+                        c.pop("_verify_audio", None)
                         c.pop("_guessed", None)
                     except Exception:
-                        try:
-                            c.pop("_verify_audio", None)
-                            c.pop("_guessed", None)
-                        except Exception:
-                            pass
+                        pass
         except Exception:
             for c, _nd in targets:
                 try:
@@ -258,6 +263,12 @@ def _fill_missing_heights(formats, limit=6):
                     c.pop("_guessed", None)
                 except Exception:
                     pass
+        finally:
+            try:
+                if ex is not None:
+                    ex.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
     try:
         formats.sort(key=lambda x: (1 if x.get("progressive") else 0,
                                     x.get("height") or 0, x.get("tbr") or 0),
@@ -520,14 +531,16 @@ def pick_formats(formats_raw, duration):
     return formats[:60]
 
 
-def extract(url, cookiefile=""):
+def extract(url, cookiefile="", fast=0):
     """Hamesha JSON string return karta hai (Kotlin ke liye safe).
 
     cookiefile: Instagram/Facebook login cookies ka path (Netscape format).
     Empty ya missing ho to bina cookies ke try hota hai.
+    fast=1: Ad-Free Player ke liye — sirf playable stream, NO related/probe
+      (6-10s target). Download tab full mode use kare (Up-Next ke saath).
     """
     try:
-        return json.dumps(_extract(url, cookiefile), ensure_ascii=False)
+        return json.dumps(_extract(url, cookiefile, fast), ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         return json.dumps({"error": friendly(e)}, ensure_ascii=False)
 
@@ -827,7 +840,11 @@ def _normalize_snapchat_url(url):
     return url
 
 
-def _extract(url, cookiefile=""):
+def _extract(url, cookiefile="", fast=0):
+    try:
+        fast = int(fast or 0)
+    except Exception:
+        fast = 0
     url = (url or "").strip()
     if not url.startswith(("http://", "https://")):
         return {"error": "URL 'http://' ya 'https://' se shuru hona chahiye."}
@@ -859,9 +876,10 @@ def _extract(url, cookiefile=""):
         # Ab worst-case ~15s x 2 x 2 = ~60s se kam, playlist sirf pehla video.
         # NOTE: success path 1 attempt me nikalta hai — retry/timeout values usey
         # slow nahi karte; ye sirf fail-fast ke liye hain.
-        "socket_timeout": 10,
-        "retries": 2,
-        "fragment_retries": 2,
+        # FAST-MODE (Ad-Free Player): retries=1 + timeout 8s = worst ~10s.
+        "socket_timeout": 8 if fast else 10,
+        "retries": 1 if fast else 2,
+        "fragment_retries": 1 if fast else 2,
         "extractor_retries": 1,
         "http_headers": {"User-Agent": _ua_for(url)},
         "no_playlist": False,
@@ -896,38 +914,41 @@ def _extract(url, cookiefile=""):
 
     # SPEED: flat-playlist + related-videos main extract ke SAATH parallel —
     # pehle ye sequential the (2-3 extra round-trip = kayi second).
+    # FAST-MODE: Watch me turant play chahiye — related/flat SKIP (0s).
+    # Download tab full mode me Up-Next milega. Playback par koi asar nahi.
     flat_box, rel_box = {}, {}
     flat_thread = None
-    if _looks_like_playlist(url):
-        def _do_flat():
-            try:
-                flat_box["r"] = _flat_playlist_entries(url, cookiefile, 20)
-            except Exception:
-                flat_box["r"] = ([], "", 0)
-        try:
-            flat_thread = threading.Thread(target=_do_flat, daemon=True)
-            flat_thread.start()
-        except Exception:
-            flat_thread = None
     spec_vid = ""
-    try:
-        ul = url.lower()
-        if "youtube.com" in ul or "youtu.be" in ul:
-            spec_vid = _parse_youtube_id(url)
-    except Exception:
-        spec_vid = ""
     rel_thread = None
-    if spec_vid:
-        def _do_rel():
+    if not fast:
+        if _looks_like_playlist(url):
+            def _do_flat():
+                try:
+                    flat_box["r"] = _flat_playlist_entries(url, cookiefile, 20)
+                except Exception:
+                    flat_box["r"] = ([], "", 0)
             try:
-                rel_box["r"] = _youtube_related(spec_vid, 15)
+                flat_thread = threading.Thread(target=_do_flat, daemon=True)
+                flat_thread.start()
             except Exception:
-                rel_box["r"] = []
+                flat_thread = None
         try:
-            rel_thread = threading.Thread(target=_do_rel, daemon=True)
-            rel_thread.start()
+            ul = url.lower()
+            if "youtube.com" in ul or "youtu.be" in ul:
+                spec_vid = _parse_youtube_id(url)
         except Exception:
-            rel_thread = None
+            spec_vid = ""
+        if spec_vid:
+            def _do_rel():
+                try:
+                    rel_box["r"] = _youtube_related(spec_vid, 15)
+                except Exception:
+                    rel_box["r"] = []
+            try:
+                rel_thread = threading.Thread(target=_do_rel, daemon=True)
+                rel_thread.start()
+            except Exception:
+                rel_thread = None
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -940,7 +961,10 @@ def _extract(url, cookiefile=""):
     playlist_index = 0
     if flat_thread is not None:
         try:
-            flat_thread.join(timeout=20)
+            # FAIL-FAST (live fix): Up-Next ke liye main video ko 20s mat roko.
+            # 4s me na aaye to khaali — video turant milega, Up-Next agle
+            # fetch/cache se aa jayega. Pehle yahin "atka" lagta tha.
+            flat_thread.join(timeout=4)
         except Exception:
             pass
         try:
@@ -965,14 +989,16 @@ def _extract(url, cookiefile=""):
 
     # Single YouTube video ho (playlist entries nahi mili) to Related videos
     # nikalo — speculative thread pehle se chal raha tha, bas result uthao.
-    if not playlist_entries:
+    # FAST-MODE: Related SKIP — Watch me turant play, suggestions baad me.
+    if not playlist_entries and not fast:
         try:
             ext = (info.get("extractor") or "").lower()
             if "youtube" in ext and info.get("id"):
                 rel = None
                 if rel_thread is not None and spec_vid and spec_vid == info.get("id"):
                     try:
-                        rel_thread.join(timeout=10)
+                        # FAIL-FAST: Related ke liye 10s mat ruko — 4s kaafi.
+                        rel_thread.join(timeout=4)
                     except Exception:
                         pass
                     try:
@@ -1056,10 +1082,12 @@ def _extract(url, cookiefile=""):
         return {"error": "Koi direct-download link nahi mila. Ye video HLS-only/private ho sakta hai — dusri quality ya video try karo."}
 
     # Facebook sd/hd jaisi entries ki EXACT resolution probe karo (label sahi aaye)
-    try:
-        _fill_missing_heights(formats)
-    except Exception:
-        pass
+    # FAST-MODE: probe SKIP — label thoda off ho sakta hai, par play turant.
+    if not fast:
+        try:
+            _fill_missing_heights(formats)
+        except Exception:
+            pass
 
     aud = [f for f in formats if f["type"] == "audio"]
     # merge-compat audio: mp4-video ke liye m4a, webm-video ke liye opus/webm

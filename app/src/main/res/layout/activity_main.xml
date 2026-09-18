@@ -1,0 +1,650 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fillViewport="true">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:contentDescription="GSK logo"
+            android:src="@drawable/logo" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="gsk-downloader"
+                android:textColor="@color/txt"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/tagline"
+                android:textColor="@color/mut"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:background="@drawable/bg_card"
+        android:padding="6dp"
+        android:text="100% Free • No Sign-Up • Aapke phone par download"
+        android:textColor="@color/accent"
+        android:textSize="11sp" />
+
+    <!-- ===== HERO (website jaisa) ===== -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:gravity="center"
+        android:text="Kisi bhi video URL se download karo — 4K se 144p"
+        android:textColor="@color/txt"
+        android:textSize="20sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:gravity="center"
+        android:text="YouTube, Instagram, TikTok, Facebook, X, Vimeo aur 1,600+ sites. Link paste karo, quality chuno, download dabao."
+        android:textColor="@color/mut"
+        android:textSize="13sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:background="@drawable/bg_card"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="8dp">
+
+        <EditText
+            android:id="@+id/urlInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@null"
+            android:hint="@string/hint_url"
+            android:imeOptions="actionGo"
+            android:inputType="textUri"
+            android:singleLine="true"
+            android:textColor="@color/txt"
+            android:textColorHint="#5B6A94"
+            android:textSize="14sp" />
+
+        <ImageButton
+            android:id="@+id/pasteBtn"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Paste"
+            android:src="@android:drawable/ic_menu_edit" />
+
+        <Button
+            android:id="@+id/goBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_btn"
+            android:text="Get Video"
+            android:textColor="#04070F"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textColor="@color/mut"
+        android:textSize="12sp" />
+
+    <!-- ===== 1-TAP LOGIN (IG/FB login-wall + FB-HD unlock, bina file-manager) ===== -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/igLoginBtn"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:text="🔑 IG"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/fbLoginBtn"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:text="🔑 FB"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/serverBtn"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:text="🌐 Server"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/cookieStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text=""
+        android:textColor="@color/mut"
+        android:textSize="11sp" />
+
+    <!-- ===== STATS (website jaisa: 4 boxes) ===== -->
+    <GridLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:columnCount="2"
+        android:rowCount="2"
+        android:useDefaultMargins="true">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_columnWeight="1"
+            android:background="@drawable/bg_card"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="12dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="1,600+" android:textColor="@color/accent" android:textSize="20sp" android:textStyle="bold" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Supported Websites" android:textColor="@color/mut" android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_columnWeight="1"
+            android:background="@drawable/bg_card"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="12dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="4K → 144p" android:textColor="@color/accent" android:textSize="20sp" android:textStyle="bold" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Har Quality Available" android:textColor="@color/mut" android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_columnWeight="1"
+            android:background="@drawable/bg_card"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="12dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="100%" android:textColor="@color/accent" android:textSize="20sp" android:textStyle="bold" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Free &amp; Unlimited" android:textColor="@color/mut" android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_columnWeight="1"
+            android:background="@drawable/bg_card"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="12dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="No" android:textColor="@color/accent" android:textSize="20sp" android:textStyle="bold" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Sign-up / Login Needed" android:textColor="@color/mut" android:textSize="11sp" />
+        </LinearLayout>
+    </GridLayout>
+
+    <!-- ===== SUPPORTED SITES (website jaisa) ===== -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="Supported Sites"
+        android:textColor="@color/txt"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <GridLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:columnCount="3"
+        android:useDefaultMargins="true">
+
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="YouTube" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Shorts" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="TikTok" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Instagram" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Facebook" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Twitter / X" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Vimeo" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Dailymotion" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Reddit" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Pinterest" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="Twitch" android:textColor="@color/mut" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_columnWeight="1" android:background="@drawable/bg_card" android:gravity="center" android:padding="8dp" android:text="... +1600 aur" android:textColor="@color/accent" android:textSize="12sp" android:textStyle="bold" />
+    </GridLayout>
+
+    <!-- ===== VIDEO PREVIEW CARD (link paste -> thumbnail + playable preview) ===== -->
+    <LinearLayout
+        android:id="@+id/previewCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_card"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/previewTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:text="Video title"
+            android:textColor="@color/txt"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/previewMeta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text=""
+            android:textColor="@color/mut"
+            android:textSize="11sp" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="200dp"
+            android:layout_marginTop="8dp"
+            android:background="#000000">
+
+            <ImageView
+                android:id="@+id/thumbPreview"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="Video thumbnail"
+                android:scaleType="centerCrop" />
+
+            <androidx.media3.ui.PlayerView
+                android:id="@+id/previewPlayer"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone"
+                app:show_buffering="when_playing"
+                app:use_controller="true" />
+
+            <Button
+                android:id="@+id/previewPlayBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:background="@drawable/bg_btn"
+                android:text="▶ Preview"
+                android:textColor="#04070F"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+
+        <!-- ===== Preview controls: 10s skip + Prev/Next (bina link copy) ===== -->
+        <LinearLayout
+            android:id="@+id/previewControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/prevBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/bg_card"
+                android:minWidth="0dp"
+                android:text="◀ Prev"
+                android:textColor="@color/txt"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/previewBack"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/bg_card"
+                android:minWidth="0dp"
+                android:text="⏪ 10s"
+                android:textColor="@color/txt"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/previewFwd"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/bg_card"
+                android:minWidth="0dp"
+                android:text="10s ⏩"
+                android:textColor="@color/txt"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/nextBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:background="@drawable/bg_card"
+                android:minWidth="0dp"
+                android:text="Next ▶"
+                android:textColor="@color/txt"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- ===== Up Next: playlist / channel videos — tap karo, link copy nahi ===== -->
+        <TextView
+            android:id="@+id/upNextTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Up Next"
+            android:textColor="@color/txt"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/upNextRecycler"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:clipToPadding="false"
+            android:nestedScrollingEnabled="false"
+            android:visibility="gone" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Link ka preview upar dikhega. Play dabao — download se pehle video check karo."
+            android:textColor="#5B6A94"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/metaText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="@color/txt"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <!-- ===== QUALITY PILLS (website jaisa) ===== -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button android:id="@+id/qMax" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_btn" android:minWidth="0dp"
+                android:text="MAX" android:textColor="#04070F" android:textSize="12sp" />
+            <Button android:id="@+id/q4320" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="8K" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/q2160" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="4K" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/q1440" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="2K" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/q1080" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="1080p" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/q720" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="720p" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/q480" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="480p" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/q360" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="360p" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/q240" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="240p" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/q144" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:layout_marginEnd="8dp" android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="144p" android:textColor="@color/txt" android:textSize="12sp" />
+            <Button android:id="@+id/qAudio" android:layout_width="wrap_content" android:layout_height="36dp"
+                android:background="@drawable/bg_card" android:minWidth="0dp"
+                android:text="MP3 / Audio" android:textColor="@color/txt" android:textSize="12sp" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recycler"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:clipToPadding="false"
+        android:minHeight="200dp"
+        android:nestedScrollingEnabled="false" />
+
+    <!-- ===== Recent: bina link copy dobara kholo (user close/clear kar sakta hai) ===== -->
+    <LinearLayout
+        android:id="@+id/recentHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/recentTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="🕘 Recent (tap karke dobara kholo — link copy nahi)"
+            android:textColor="@color/txt"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/recentCloseBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_card"
+            android:minWidth="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="✕ Band"
+            android:textColor="@color/mut"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/recentClearBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_card"
+            android:minWidth="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="🗑 Clear"
+            android:textColor="#F87171"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recentRecycler"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:clipToPadding="false"
+        android:nestedScrollingEnabled="false"
+        android:visibility="gone" />
+
+    <!-- ===== 3 EASY STEPS (website jaisa) ===== -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:gravity="center"
+        android:text="3 Easy Steps"
+        android:textColor="@color/txt"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:background="@drawable/bg_card"
+        android:orientation="vertical" android:padding="14dp">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="1. Link Copy Karo" android:textColor="@color/txt" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Jis site se video chahiye wahan jaao, video ka URL copy karo." android:textColor="@color/mut" android:textSize="12sp" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:background="@drawable/bg_card"
+        android:orientation="vertical" android:padding="14dp">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="2. Paste &amp; Scan Karo" android:textColor="@color/txt" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Yahan paste karo aur Get Video dabao. Preview dekho, quality chuno." android:textColor="@color/mut" android:textSize="12sp" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:background="@drawable/bg_card"
+        android:orientation="vertical" android:padding="14dp">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="3. Download Dabao" android:textColor="@color/txt" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Speed dekho, pause/cancel karo. File Download/gsk-downloader me save hogi." android:textColor="@color/mut" android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- ===== FAQ (website jaisa, tap karke kholo) ===== -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:gravity="center"
+        android:text="Questions? Jawab"
+        android:textColor="@color/txt"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:background="@drawable/bg_card"
+        android:orientation="vertical" android:padding="14dp">
+        <TextView android:id="@+id/fq1" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="+ Kitni websites support hoti hain?" android:textColor="@color/txt" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:id="@+id/fa1" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:text="1,600+ sites — YouTube, Instagram, TikTok, Facebook, X, Vimeo, Reddit aur bahut si." android:textColor="@color/mut" android:textSize="12sp" android:visibility="gone" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:background="@drawable/bg_card"
+        android:orientation="vertical" android:padding="14dp">
+        <TextView android:id="@+id/fq2" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="+ Kya 4K me download hoga?" android:textColor="@color/txt" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:id="@+id/fa2" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:text="Haan, agar source me 4K hai. Smooth ke liye 1080p MP4 (AVC, Smooth wali) best hai." android:textColor="@color/mut" android:textSize="12sp" android:visibility="gone" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:background="@drawable/bg_card"
+        android:orientation="vertical" android:padding="14dp">
+        <TextView android:id="@+id/fq3" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="+ Sirf audio (MP3) chahiye?" android:textColor="@color/txt" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:id="@+id/fa3" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:text="Haan. MP3 / Audio pill dabao, phir koi audio quality download karo." android:textColor="@color/mut" android:textSize="12sp" android:visibility="gone" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:background="@drawable/bg_card"
+        android:orientation="vertical" android:padding="14dp">
+        <TextView android:id="@+id/fq4" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="+ File kahan save hogi?" android:textColor="@color/txt" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:id="@+id/fa4" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:text="Download/gsk-downloader folder me — gallery/Downloads me milegi." android:textColor="@color/mut" android:textSize="12sp" android:visibility="gone" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:background="@drawable/bg_card"
+        android:orientation="vertical" android:padding="14dp">
+        <TextView android:id="@+id/fq5" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="+ Instagram / Facebook link fail ho raha?" android:textColor="@color/txt" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:id="@+id/fa5" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:text="Facebook public videos (SD+HD) BINA LOGIN chalti hain. Instagram ke liye 2 raaste: (1) 🌐 Server button me apna server URL dalo — server ke login se sab users bina-login download karenge (best), (2) 'IG Login' se apne account se ek baar login karo. Private videos me hamesha login lagega." android:textColor="@color/mut" android:textSize="12sp" android:visibility="gone" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/footerText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:text="@string/footer"
+        android:textColor="#5B6A94"
+        android:textSize="11sp" />
+</LinearLayout>
+</ScrollView>

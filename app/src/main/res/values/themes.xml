@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.GSK" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:textColorPrimary">@color/txt</item>
+        <item name="android:textColorSecondary">@color/mut</item>
+        <item name="colorAccent">@color/accent</item>
+    </style>
+</resources>

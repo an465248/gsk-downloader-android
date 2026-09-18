@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'com.lvigs.gskdownloader'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.lvigs.gskdownloader'
+        minSdk 26
+        targetSdk 34
+        versionCode 9
+        versionName '1.8'
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+// yt-dlp PHONE par chalta hai (Chaquopy Python) — extract/download user ke
+// IP + network + CPU/RAM se hota hai, server ka zero use.
+chaquopy {
+    defaultConfig {
+        version '3.12'
+        buildPython '/home/gopal/.pythons/cpython-3.12.14-linux-x86_64-gnu/bin/python3'
+        pip {
+            install 'yt-dlp'
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // Preview me video+audio ek saath (YouTube ke alag tracks merge karke)
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-ui:1.4.1'
+}

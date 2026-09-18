@@ -1,0 +1,17 @@
+# Netscape HTTP Cookie File — GSK Downloader (Android app ke liye)
+#
+# Instagram / Facebook login-wall hatane ke 2 tareeke (koi 1 karo):
+#
+# TAREEKA 1 (asan, bina rebuild): file manager se
+#   Android/data/com.lvigs.gskdownloader/files/ me apni cookies.txt rakho,
+#   phir app me dobara Get Video dabao. Upar "IG/FB login ON" dikhna chahiye.
+#
+# TAREEKA 2 (rebuild): is file ki jagah apni cookies rakho, phir APK rebuild karo.
+#
+# Cookies kaise nikale:
+#   1. Phone/PC ke browser me Instagram + Facebook me LOGIN karo
+#   2. "Get cookies.txt" extension se cookies export karo (instagram.com + facebook.com)
+#   3. Ye comment-lines rehne do, koi dikkat nahi
+#
+# YouTube cookies ki zaroorat nahi (public videos bina login ke nikalti hain).
+# Khali file ho to app bina cookies ke chalegi — koi error nahi ayega.

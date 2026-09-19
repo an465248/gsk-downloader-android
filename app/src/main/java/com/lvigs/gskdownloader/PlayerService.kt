@@ -36,8 +36,10 @@ import com.google.common.collect.ImmutableList
  * - YouTube ke alag video/audio tracks yahin merge hote hain (factory).
  * - Screen-off par audio chalta rahe (wake-mode local).
  *
- * Activity (PlayerActivity) MediaController se judti hai — play/pause/seek/
- * speed/quality sab controller se, player ek hi (service me) rehta hai.
+ * Activity (PlayerActivity) ISI player ko same-process me directly drive karti
+ *  hai — play/pause/seek/speed/quality sab isi par, player ek hi rehta hai.
+ *  MediaSession/lock-screen/notification sirf BRIDGE hain (observe + system
+ *  commands), khud kuch nahi bajate.
  */
 class PlayerService : MediaSessionService() {
 
@@ -61,6 +63,15 @@ class PlayerService : MediaSessionService() {
          *  Activity zinda ho to set karti hai, marne par null (tab no-op). */
         @Volatile var externalNext: (() -> Unit)? = null
         @Volatile var externalPrev: (() -> Unit)? = null
+
+        /** SINGLE engine ka same-process access: PlayerActivity ISI player ko
+         *  directly drive karti hai (play/pause/seek/quality sab yahi).
+         *  Koi doosra player kahin nahi banta. Service engine ka OWNER hai —
+         *  activity sirf use karti hai, release KABHI nahi karti. */
+        @Volatile var playerRef: ExoPlayer? = null
+        @Volatile var playerReady: Boolean = false
+        /** Engine taiyaar hote hi (main thread par) bulaya jata hai. */
+        @Volatile var onPlayerReady: (() -> Unit)? = null
 
         fun itemFor(
             title: String, videoUrl: String, audioUrl: String, hasAudio: Boolean,
@@ -163,6 +174,13 @@ class PlayerService : MediaSessionService() {
                 .setWakeMode(C.WAKE_MODE_LOCAL)
                 .build()
             player = p
+            // Engine publish karo — activity ISI instance ko drive karegi.
+            // (onCreate main thread par chalta hai, isliye direct assign safe.)
+            try {
+                playerRef = p
+                playerReady = true
+                try { onPlayerReady?.invoke() } catch (_: Exception) {}
+            } catch (_: Exception) {}
             p.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
                     // Kuch bajne layak nahi bacha (Stop dab gaya) = service band.
@@ -180,19 +198,46 @@ class PlayerService : MediaSessionService() {
             try {
                 session = MediaSession.Builder(this, p).build()
             } catch (_: Exception) {
-                // Session (bridge) fail -> player phir bhi ZINDA (activity
-                // retry/bind dobara karegi). Bridge ke bina playback nahi rukegi.
+                // Session (bridge) fail -> player phir bhi ZINDA (foreground
+                // playback direct-engine se chalega). Bridge ko thodi der me
+                // dobara banane ki koshish karo — playback kabhi nahi rukegi.
                 session = null
+                try {
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try { ensureSession() } catch (_: Exception) {}
+                    }, 5000)
+                } catch (_: Exception) {}
             }
             try { setMediaNotificationProvider(Provider()) } catch (_: Exception) {}
         } catch (_: Exception) {
             // Player build hi fail -> service bekar hai, band karo (activity
-            // bind-retry me Retry dikhayegi, kala screen nahi).
+            // engine-wait me Retry dikhayegi, kala screen nahi).
             try { stopSelf() } catch (_: Exception) {}
         }
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+    /** Bridge (MediaSession) dobara banao — sirf tab jab player ZINDA ho.
+     *  Main thread par chalao (MediaSession ko Looper chahiye). */
+    private fun ensureSession() {
+        try {
+            if (session != null) return
+            val p = player ?: return
+            session = MediaSession.Builder(this, p).build()
+        } catch (_: Exception) {}
+    }
+
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
+        // Bridge manga gaya par bana nahi hai -> banane ki koshish karo.
+        // (Binder thread par build nahi kar sakte, isliye main par post.)
+        try {
+            if (session == null && player != null) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    try { ensureSession() } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+        return session
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -260,6 +305,9 @@ class PlayerService : MediaSessionService() {
     override fun onDestroy() {
         try { externalNext = null } catch (_: Exception) {}
         try { externalPrev = null } catch (_: Exception) {}
+        try { onPlayerReady = null } catch (_: Exception) {}
+        try { playerReady = false } catch (_: Exception) {}
+        try { playerRef = null } catch (_: Exception) {}
         try { session?.release() } catch (_: Exception) {}
         session = null
         try { player?.release() } catch (_: Exception) {}

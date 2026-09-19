@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.PictureInPictureParams
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -33,11 +32,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import com.google.common.util.concurrent.ListenableFuture
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -106,14 +103,18 @@ class PlayerActivity : AppCompatActivity() {
     // SINGLE-PLAYER ARCHITECTURE: poori app me playback ka ek hi engine hai —
     // PlayerService ke andar wala ExoPlayer (merge factory + wake-lock + audio
     // attrs sahit). Yahan koi doosra ExoPlayer kabhi nahi banega.
-    // Activity sirf MediaController (bridge) se usi player ko chalati hai:
-    // PLAY/PAUSE/SEEK/±10s/PREV/NEXT/SPEED sab isi player par jate hain, aur
-    // MediaSession/lock-screen/notification isi player ko observe karte hain.
-    private var controller: MediaController? = null
-    private var controllerFuture: ListenableFuture<MediaController>? = null
-    private val pendingCtrl = ArrayDeque<(MediaController) -> Unit>()
-    // Controller abhi na juda ho to aakhri play-request yahan rehti hai —
-    // judte hi ISI player par fire hogi (doosra player nahi banega).
+    // Activity (same process) ISI engine ko directly drive karti hai:
+    // PLAY/PAUSE/SEEK/±10s/PREV/NEXT/SPEED/QUALITY sab isi player par jate hain.
+    // MediaSession/lock-screen/notification sirf BRIDGE hain — ye ISI player ko
+    // observe karte hain, khud kuch nahi bajate. Bridge ka fail/timeout/artwork
+    // /permission playback KABHI nahi rokega (koi MediaController-bind dependency
+    // nahi hai — foreground playback seedha engine se chalta hai).
+    // Service engine ka OWNER hai: activity use karti hai, release KABHI nahi karti.
+    private var engine: ExoPlayer? = null
+    private var engineAttached: Boolean = false
+    private var engineWaits: Int = 0
+    // Engine abhi taiyaar na ho to aakhri play-request yahan rehti hai —
+    // taiyaar hote hi ISI player par fire hogi (doosra player nahi banega).
     private data class PendingPlay(
         val title: String,
         val streamUrl: String,
@@ -123,7 +124,6 @@ class PlayerActivity : AppCompatActivity() {
         val localUri: android.net.Uri? = null,
     )
     private var pendingPlay: PendingPlay? = null
-    private var bindAttempts: Int = 0
     private var cookiePath: String = ""
     private var pyReady = false
 
@@ -376,133 +376,120 @@ class PlayerActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** Background service start + MediaController jodo.
-     *  SINGLE-PLAYER: playback engine sirf PlayerService ka ExoPlayer hai.
-     *  Ye bridge usi player se judta hai — kabhi doosra player nahi banta,
-     *  aur judne me der/fail ho to bhi playback-request pending rehti hai
-     *  (stuck status nahi, retry ke saath). */
+    /** SINGLE engine taiyaar karo + ISI se jodo (direct, same-process).
+     *  Koi MediaController-bind dependency NAHI — foreground playback seedha
+     *  engine se chalta hai. Bridge (MediaSession/notification/lock-screen)
+     *  service me ISI engine ko observe karta hai, best-effort. */
     private fun ensurePlayerService() {
         try {
-            val i = Intent(this, PlayerService::class.java)
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            startEngineService()
         } catch (_: Exception) {}
         // Notification ke Next/Prev = queue ka agla/pichla (extract karke).
         try {
             PlayerService.externalNext = { runOnUiThread { stepQueue(1) } }
             PlayerService.externalPrev = { runOnUiThread { stepQueue(-1) } }
         } catch (_: Exception) {}
-        bindController()
-        // Watchdog: bind atak jaye to dobara try karo (doosra player NAHI).
-        // Pending play-request surakshit hai — judte hi fire hogi.
+        // Engine taiyaar hote hi attach (service onCreate se callback aayega).
+        try {
+            PlayerService.onPlayerReady = { runOnUiThread { attachEngine() } }
+        } catch (_: Exception) {}
+        attachEngine()
+        // Watchdog: engine abhi taiyaar na ho to service dobara jagao.
+        // Pending play-request surakshit hai — taiyaar hote hi fire hogi.
+        // Stuck status kabhi nahi: har haal me status aage badhta hai.
         try {
             playerRoot.postDelayed({
                 try {
-                    if (controller == null && !isFinishing && !isDestroyed) {
+                    if (!engineAttached && !isFinishing && !isDestroyed) {
                         if (pendingPlay != null) {
-                            status("Player jud raha hai... thoda ruko ya ↻ Retry dabao.")
+                            status("Player taiyaar ho raha... thoda ruko ya ↻ Retry dabao.")
                         }
-                        bindController()
+                        try { startEngineService() } catch (_: Exception) {}
+                        attachEngine()
                     }
                 } catch (_: Exception) {}
             }, 8000)
         } catch (_: Exception) {}
     }
 
-    /** MediaController (bridge) ko SINGLE player se jodo — non-blocking,
-     *  timeout + retry sahit. Har failure best-effort: bridge fail ho to bhi
-     *  stream/player-init kabhi block nahi hota, status hamesha aage badhta hai. */
-    private fun bindController() {
+    /** Engine service start karo — FGS se, fail ho to plain start fallback. */
+    private fun startEngineService() {
         try {
-            if (isFinishing || isDestroyed) return
-            if (controller != null) return
-            val inFlight = try {
-                controllerFuture?.let { !it.isDone } ?: false
-            } catch (_: Exception) { false }
-            if (inFlight) return
-            // Purana adhoora future hatao, naya banao.
-            try { controllerFuture?.let { MediaController.releaseFuture(it) } } catch (_: Exception) {}
-            controllerFuture = null
-            val token = SessionToken(this, ComponentName(this, PlayerService::class.java))
-            val fut = MediaController.Builder(this, token).buildAsync()
-            controllerFuture = fut
-            fut.addListener({
-                try {
-                    // Timeout-safe: get() bina timeout ke kabhi atak sakta hai.
-                    val ctrl = try {
-                        fut.get(10, java.util.concurrent.TimeUnit.SECONDS)
-                    } catch (_: Exception) { null }
-                    if (ctrl == null) {
-                        scheduleBindRetry()
-                        return@addListener
-                    }
-                    bindAttempts = 0
-                    controller = ctrl
-                    try { playerView.player = ctrl } catch (_: Exception) {}
-                    try { ctrl.addListener(ctrlListener) } catch (_: Exception) {}
-                    try { applySpeed() } catch (_: Exception) {}
-                    // Pehle atki play-request ISI player par fire karo.
-                    try {
-                        pendingPlay?.let { pp ->
-                            pendingPlay = null
-                            firePlayOnController(pp)
-                        }
-                    } catch (_: Exception) {}
-                    // Baaki non-play ops best-effort — ek fail to baaki rukenge nahi.
-                    while (true) {
-                        val fn = try { pendingCtrl.removeFirstOrNull() } catch (_: Exception) { null } ?: break
-                        try { fn(ctrl) } catch (_: Exception) {}
-                    }
-                } catch (_: Exception) {
-                    scheduleBindRetry()
-                }
-            }, ContextCompat.getMainExecutor(this))
-        } catch (_: Exception) {
-            scheduleBindRetry()
-        }
+            val i = Intent(this, PlayerService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            } catch (_: Exception) {
+                // FGS-start mana ho (rare) to plain start — engine phir bhi banega.
+                try { startService(Intent(this, PlayerService::class.java)) } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
     }
 
-    /** Bind fail/timeout par retry (max 5, 3s gap). Uske baad bhi na jude to
-     *  status me Retry batao — kala screen / stuck status kabhi nahi. */
-    private fun scheduleBindRetry() {
+    /** ISI (single) engine se jodo: PlayerView + listener + speed + pending play.
+     *  Engine mar chuka ho (null) to service dobara jagao + thode gap me retry
+     *  (max ~5) — uske baad bhi na bane to status me Retry (kala screen nahi). */
+    private fun attachEngine() {
         try {
             if (isFinishing || isDestroyed) return
-            if (controller != null) return
-            try { controllerFuture?.let { MediaController.releaseFuture(it) } } catch (_: Exception) {}
-            controllerFuture = null
-            if (bindAttempts >= 5) {
-                if (pendingPlay != null) {
-                    status("Player nahi juda — ↻ Retry dabao (net/service check karo).")
+            if (engineAttached && engine != null) return
+            val p = try {
+                if (PlayerService.playerReady) PlayerService.playerRef else null
+            } catch (_: Exception) { null }
+            if (p == null) {
+                if (engineWaits < 5) {
+                    engineWaits++
+                    try {
+                        playerRoot.postDelayed({
+                            try {
+                                if (!engineAttached && !isFinishing && !isDestroyed) {
+                                    try { startEngineService() } catch (_: Exception) {}
+                                    attachEngine()
+                                }
+                            } catch (_: Exception) {}
+                        }, 2000)
+                    } catch (_: Exception) {}
+                } else if (pendingPlay != null) {
+                    status("Player taiyaar nahi hua — ↻ Retry dabao.")
                 }
                 return
             }
-            bindAttempts++
+            engineWaits = 0
+            engine = p
+            engineAttached = true
+            try { playerView.player = p } catch (_: Exception) {}
+            try { p.addListener(engineListener) } catch (_: Exception) {}
+            try { applySpeed() } catch (_: Exception) {}
+            // Atki play-request ISI engine par fire karo.
             try {
-                playerRoot.postDelayed({ bindController() }, 3000)
+                pendingPlay?.let { pp ->
+                    pendingPlay = null
+                    firePlayOnEngine(pp)
+                }
             } catch (_: Exception) {}
         } catch (_: Exception) {}
     }
 
-    /** Controller ops (speed/seek type, non-play): juda ho to abhi, warna
-     *  chhoti queue me. Play-requests isme kabhi nahi aati (pendingPlay alag). */
-    private fun withController(fn: (MediaController) -> Unit) {
+    /** Engine op (speed/seek type): engine ho to abhi, warna jagao + toast.
+     *  Play-requests isme kabhi nahi aati (pendingPlay alag). */
+    private fun withEngine(fn: (ExoPlayer) -> Unit) {
         try {
-            val c = controller
-            if (c != null) {
-                try { fn(c) } catch (_: Exception) {}
+            val e = engine
+            if (e != null && engineAttached) {
+                try { fn(e) } catch (_: Exception) {}
             } else {
-                try {
-                    if (pendingCtrl.size < 5) pendingCtrl.add(fn)
-                } catch (_: Exception) {}
-                try { bindController() } catch (_: Exception) {}
+                try { startEngineService() } catch (_: Exception) {}
+                try { attachEngine() } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
     }
 
     private fun applySpeed() {
-        try { controller?.setPlaybackSpeed(speeds[speedIdx]) } catch (_: Exception) {}
+        try { engine?.setPlaybackSpeed(speeds[speedIdx]) } catch (_: Exception) {}
     }
 
-    private val ctrlListener = object : Player.Listener {
+    /** ISI single engine ka state listener: playing/paused/buffering/position/
+     *  duration/completed/title sab yahin se UI + MediaSession me jata hai. */
+    private val engineListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
             if (state == Player.STATE_ENDED) {
                 // Auto Next ON: agla apne aap; OFF: stop + suggestion.
@@ -520,14 +507,14 @@ class PlayerActivity : AppCompatActivity() {
             }
             // Keep-screen: pause par normal timeout allow, play par ON.
             try {
-                val playing = try { controller?.isPlaying ?: false } catch (_: Exception) { false }
+                val playing = try { engine?.isPlaying ?: false } catch (_: Exception) { false }
                 if (playing && keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 else if (!playing) {
                     // pause par position save (resume ke liye)
                     try {
                         if (curPageUrl.isNotEmpty()) {
                             val p = curPos()
-                            val d = try { controller?.duration ?: 0L } catch (_: Exception) { 0L }
+                            val d = try { engine?.duration ?: 0L } catch (_: Exception) { 0L }
                             saveResume(curPageUrl, p, d)
                             curData?.let { saveLastPlayed(it, p) }
                         }
@@ -1196,7 +1183,7 @@ class PlayerActivity : AppCompatActivity() {
         // BUG-FIX: quality badalne par video shuru se nahi — wahi position se
         // (YouTube jaisa). Seek prepare ke baad lagta hai.
         val pos = try {
-            controller?.currentPosition ?: 0L
+            engine?.currentPosition ?: 0L
         } catch (_: Exception) { 0L }
         playStream(curTitle, q.url, q.audioUrl, q.hasAudio, pos)
         toast("Quality: ${q.label}")
@@ -1320,9 +1307,10 @@ class PlayerActivity : AppCompatActivity() {
                 playerView.resizeMode = zoomModes[zoomIdx]
             } catch (_: Exception) {}
             titleText.text = title
-            // SINGLE-PLAYER order: fetch -> ISI player par item set -> READY ->
-            // play -> MediaSession/notification khud sync (bridge, best-effort).
-            // Bridge ka fail/timeout/artwork/permission playback NAHI rokega.
+            // SINGLE-PLAYER order: fetch -> ISI engine par item set -> READY ->
+            // play. MediaSession/notification BRIDGE khud sync hota hai
+            // (best-effort) — uska fail/timeout/artwork/permission playback
+            // NAHI rokta (koi bind-dependency nahi).
             // Stream khali ho to kala screen nahi — turant error dikhao.
             if (streamUrl.isEmpty()) {
                 loadingBusy = false
@@ -1330,35 +1318,39 @@ class PlayerActivity : AppCompatActivity() {
                 status("Video couldn't be loaded — ↻ Retry dabao. (empty stream)")
                 return
             }
-            // Har play-request yaad rakho (bind-retry isi ko fire karega).
+            // Har play-request yaad rakho (engine-wait isi ko fire karega).
             try {
                 curTitle = title
                 pendingPlay = PendingPlay(title, streamUrl, audioUrl, hasAudio, startAtMs)
             } catch (_: Exception) {}
-            val ctrlNow = try { controller } catch (_: Exception) { null }
-            if (ctrlNow == null) {
-                // Bridge abhi jud raha hai — request pending hai, judte hi ISI
-                // player par bajegi. Stuck status nahi: retry loop chal raha hai.
-                status("🚫 Ad-Free load ho raha... (player jud raha hai, judte hi bajega)")
-                try { bindController() } catch (_: Exception) {}
+            val eng = try {
+                if (engineAttached) engine else null
+            } catch (_: Exception) { null }
+            if (eng == null) {
+                // Engine taiyaar ho raha hai — request pending hai, taiyaar hote
+                // hi ISI player par bajegi. Stuck status nahi: wait-retry chalu hai.
+                status("🚫 Ad-Free load ho raha... (player taiyaar ho raha hai)")
+                try { attachEngine() } catch (_: Exception) {}
                 return
             }
             try {
                 pendingPlay = null
-                firePlayOnController(ctrlNow, title, streamUrl, audioUrl, hasAudio, startAtMs)
+                firePlayOnEngine(eng, title, streamUrl, audioUrl, hasAudio, startAtMs)
             } catch (e: Exception) {
+                android.util.Log.e("GSK-Player", "playStream fire failed", e)
                 status("Video couldn't be loaded — ↻ Retry dabao. (${e.message?.take(80)})")
             }
         } catch (e: Exception) {
+            android.util.Log.e("GSK-Player", "playStream failed", e)
             status("Video couldn't be loaded — ↻ Retry dabao. (${e.message?.take(80)})")
         }
     }
 
-    /** ISI (single) player par media item lagao + bajao.
+    /** ISI (single) engine par media item lagao + bajao.
      *  Artwork/thumb fail ho to bhi playback START hogi (thumb optional hai).
-     *  Controller disposed/mara ho to request pending rakho + re-bind karo. */
-    private fun firePlayOnController(
-        ctrl: MediaController, title: String, streamUrl: String,
+     *  Engine mar chuka ho to request pending rakho + dobara jagao. */
+    private fun firePlayOnEngine(
+        eng: ExoPlayer, title: String, streamUrl: String,
         audioUrl: String, hasAudio: Boolean, startAtMs: Long,
     ) {
         try {
@@ -1375,56 +1367,67 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
             try {
-                ctrl.setMediaItem(item, if (startAtMs > 1000) startAtMs else 0)
-                ctrl.prepare()
-                try { ctrl.setPlaybackSpeed(speeds[speedIdx]) } catch (_: Exception) {}
-                ctrl.play()
+                eng.setMediaItem(item, if (startAtMs > 1000) startAtMs else 0)
+                eng.prepare()
+                try { eng.setPlaybackSpeed(speeds[speedIdx]) } catch (_: Exception) {}
+                eng.play()
                 try { applyKeepScreenOn() } catch (_: Exception) {}
                 status("🚫 Ad-Free chal raha hai... (Back = background play, notification se ⏮ ⏪ ⏯ ⏩ ⏭)")
             } catch (e: Exception) {
-                // Disposed/dead controller -> dobara jodo, request pending rakho.
+                android.util.Log.e("GSK-Player", "engine fire failed", e)
+                // Engine dead -> dobara jagao, request pending rakho.
                 try {
                     pendingPlay = PendingPlay(title, streamUrl, audioUrl, hasAudio, startAtMs)
                 } catch (_: Exception) {}
                 try {
-                    controller = null
-                    bindController()
+                    engineAttached = false
+                    engine = null
+                    startEngineService()
+                    attachEngine()
                 } catch (_: Exception) {}
-                status("🚫 Ad-Free load ho raha... (player jud raha hai, judte hi bajega)")
+                status("🚫 Ad-Free load ho raha... (player taiyaar ho raha hai)")
             }
         } catch (e: Exception) {
             status("Video couldn't be loaded — ↻ Retry dabao. (${e.message?.take(80)})")
         }
     }
 
-    /** PendingPlay holder se fire karo (bind-listener/watchdog ke liye). */
-    private fun firePlayOnController(pp: PendingPlay) {
-        val c = try { controller } catch (_: Exception) { null } ?: return
+    /** PendingPlay holder se fire karo (engine-ready/watchdog ke liye). */
+    private fun firePlayOnEngine(pp: PendingPlay) {
+        val e = try {
+            if (engineAttached) engine else null
+        } catch (_: Exception) { null } ?: return
         try {
             if (pp.localUri != null) {
                 val item = try {
                     PlayerService.itemForLocal(pp.title, pp.localUri)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     status("Video couldn't be loaded — ↻ Retry dabao.")
                     return
                 }
                 try {
-                    c.setMediaItem(item)
-                    c.prepare()
-                    c.play()
+                    e.setMediaItem(item)
+                    e.prepare()
+                    e.play()
                     status("📁 Local file chal rahi — ad-free.")
-                } catch (_: Exception) {
+                } catch (ex: Exception) {
+                    android.util.Log.e("GSK-Player", "engine local fire failed", ex)
                     try { pendingPlay = pp } catch (_: Exception) {}
-                    try { controller = null; bindController() } catch (_: Exception) {}
+                    try {
+                        engineAttached = false
+                        engine = null
+                        startEngineService()
+                        attachEngine()
+                    } catch (_: Exception) {}
                 }
                 return
             }
-            firePlayOnController(c, pp.title, pp.streamUrl, pp.audioUrl, pp.hasAudio, pp.startAtMs)
+            firePlayOnEngine(e, pp.title, pp.streamUrl, pp.audioUrl, pp.hasAudio, pp.startAtMs)
         } catch (_: Exception) {}
     }
 
-    /** Downloaded local file (file/content Uri) — ISI single player me.
-     *  Bridge na juda ho to request pending rahegi, judte hi bajegi. */
+    /** Downloaded local file (file/content Uri) — ISI single engine me.
+     *  Engine taiyaar na ho to request pending rahegi, hote hi bajegi. */
     private fun playLocalUri(title: String, uri: android.net.Uri) {
         try {
             titleText.text = title
@@ -1432,15 +1435,17 @@ class PlayerActivity : AppCompatActivity() {
                 curTitle = title
                 pendingPlay = PendingPlay(title, "", "", true, 0L, localUri = uri)
             } catch (_: Exception) {}
-            val c = try { controller } catch (_: Exception) { null }
-            if (c == null) {
-                status("📁 Local file taiyaar... (player jud raha hai, judte hi bajegi)")
-                try { bindController() } catch (_: Exception) {}
+            val e = try {
+                if (engineAttached) engine else null
+            } catch (_: Exception) { null }
+            if (e == null) {
+                status("📁 Local file taiyaar... (player taiyaar ho raha hai)")
+                try { attachEngine() } catch (_: Exception) {}
                 return
             }
             try {
                 pendingPlay = null
-                firePlayOnController(PendingPlay(title, "", "", true, 0L, localUri = uri))
+                firePlayOnEngine(PendingPlay(title, "", "", true, 0L, localUri = uri))
             } catch (_: Exception) {
                 status("Video couldn't be loaded — ↻ Retry dabao.")
             }
@@ -1463,7 +1468,7 @@ class PlayerActivity : AppCompatActivity() {
                     speedIdx = which
                     savedSpeedIdx = which
                     savePlayerSettings()
-                    withController { try { it.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {} }
+                    withEngine { try { it.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {} }
                     updateSpeedLabel()
                     toast("Speed: ${labels[which]}")
                     d.dismiss()
@@ -1483,29 +1488,30 @@ class PlayerActivity : AppCompatActivity() {
     // ---------------- 10s / Replay / Retry / Volume / Settings ----------------
     private fun curPos(): Long {
         return try {
-            controller?.currentPosition ?: 0L
+            engine?.currentPosition ?: 0L
         } catch (_: Exception) { 0L }
     }
 
     private fun seekBy(deltaMs: Long) {
         try {
-            val c = controller
-            if (c != null) {
-                val dur = try { c.duration } catch (_: Exception) { androidx.media3.common.C.TIME_UNSET }
-                var np = c.currentPosition + deltaMs
+            val e = engine
+            if (e != null && engineAttached) {
+                val dur = try { e.duration } catch (_: Exception) { androidx.media3.common.C.TIME_UNSET }
+                var np = e.currentPosition + deltaMs
                 if (np < 0) np = 0
                 if (dur != androidx.media3.common.C.TIME_UNSET && dur > 0 && np > dur) np = dur
-                c.seekTo(np)
+                e.seekTo(np)
                 flashSeek(if (deltaMs < 0) "↶ ${kotlin.math.abs(deltaMs / 1000)} seconds" else "↷ ${deltaMs / 1000} seconds")
                 return
             }
-            toast("Player jud raha hai, ruko...")
+            toast("Player taiyaar ho raha hai, ruko...")
+            try { attachEngine() } catch (_: Exception) {}
         } catch (_: Exception) {}
     }
 
     private fun replayCurrent() {
         try {
-            withController { it.seekTo(0); it.play() }
+            withEngine { it.seekTo(0); it.play() }
             flashSeek("↺ Replay")
             toast("Replay — shuru se.")
         } catch (_: Exception) {}
@@ -1702,7 +1708,7 @@ class PlayerActivity : AppCompatActivity() {
                             if (!longPressSpeed) {
                                 longPressSpeed = true
                                 savedSpeedIdx = speedIdx
-                                withController { try { it.setPlaybackSpeed(2f) } catch (_: Exception) {} }
+                                withEngine { try { it.setPlaybackSpeed(2f) } catch (_: Exception) {} }
                                 flashSeek("2x ▶")
                             }
                         } catch (_: Exception) {}
@@ -1716,7 +1722,7 @@ class PlayerActivity : AppCompatActivity() {
                     if (ev.action == MotionEvent.ACTION_UP && longPressSpeed) {
                         longPressSpeed = false
                         val s = speeds.getOrNull(savedSpeedIdx) ?: 1f
-                        withController { try { it.setPlaybackSpeed(s) } catch (_: Exception) {} }
+                        withEngine { try { it.setPlaybackSpeed(s) } catch (_: Exception) {} }
                     }
                 } catch (_: Exception) {}
                 false // consume mat karo — play/pause/controller chalta rahe
@@ -1874,9 +1880,9 @@ class PlayerActivity : AppCompatActivity() {
         super.onUserLeaveHint()
         try {
             if (!pipOn) return
-            val c = controller
-            val st = c?.playbackState ?: Player.STATE_IDLE
-            val ready = c?.playWhenReady ?: false
+            val e = engine
+            val st = e?.playbackState ?: Player.STATE_IDLE
+            val ready = e?.playWhenReady ?: false
             if (Build.VERSION.SDK_INT >= 26 && st != Player.STATE_IDLE && ready) {
                 val p = PictureInPictureParams.Builder()
                     .setAspectRatio(Rational(16, 9))
@@ -2030,18 +2036,18 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    /** Activity band ho rahi hai — bridge chhodo, lekin SINGLE player service
-     *  me chalta rahe (background + notification). Baj NA raha ho to service
-     *  bhi band karo (zombie service nahi). */
-    private fun releaseController() {
-        try { controller?.removeListener(ctrlListener) } catch (_: Exception) {}
+    /** Activity band ho rahi hai — engine se detach karo (view + listener),
+     *  lekin SINGLE engine service me chalta rahe (background + notification).
+     *  Baj NA raha ho to service bhi band karo (zombie service nahi).
+     *  Engine ko release KABHI mat karo — OWNER service hai. */
+    private fun releaseEngine() {
+        try { engine?.removeListener(engineListener) } catch (_: Exception) {}
         try { playerView.player = null } catch (_: Exception) {}
-        try { controllerFuture?.let { MediaController.releaseFuture(it) } } catch (_: Exception) {}
-        controller = null
-        controllerFuture = null
-        try { pendingCtrl.clear() } catch (_: Exception) {}
+        engine = null
+        engineAttached = false
         try { pendingPlay = null } catch (_: Exception) {}
-        bindAttempts = 0
+        engineWaits = 0
+        try { PlayerService.onPlayerReady = null } catch (_: Exception) {}
     }
 
     // NOTE: Background ON ho to onPause me player rokna NAHI — screen off /
@@ -2052,12 +2058,12 @@ class PlayerActivity : AppCompatActivity() {
             // position hamesha save (resume + last-played ke liye)
             if (curPageUrl.isNotEmpty()) {
                 val p = curPos()
-                val d = try { controller?.duration ?: 0L } catch (_: Exception) { 0L }
+                val d = try { engine?.duration ?: 0L } catch (_: Exception) { 0L }
                 saveResume(curPageUrl, p, d)
                 curData?.let { saveLastPlayed(it, p) }
             }
             if (!bgPlayOn) {
-                try { controller?.pause() } catch (_: Exception) {}
+                try { engine?.pause() } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
     }
@@ -2066,7 +2072,7 @@ class PlayerActivity : AppCompatActivity() {
         try {
             if (curPageUrl.isNotEmpty()) {
                 val p = curPos()
-                val d = try { controller?.duration ?: 0L } catch (_: Exception) { 0L }
+                val d = try { engine?.duration ?: 0L } catch (_: Exception) { 0L }
                 saveResume(curPageUrl, p, d)
             }
         } catch (_: Exception) {}
@@ -2075,10 +2081,10 @@ class PlayerActivity : AppCompatActivity() {
         try { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } catch (_: Exception) {}
         try { showSystemBars() } catch (_: Exception) {}
         try {
-            val c = controller
+            val e = engine
             val playing = try {
-                c != null && c.playWhenReady &&
-                    (c.playbackState == Player.STATE_BUFFERING || c.playbackState == Player.STATE_READY)
+                e != null && e.playWhenReady &&
+                    (e.playbackState == Player.STATE_BUFFERING || e.playbackState == Player.STATE_READY)
             } catch (_: Exception) { false }
             if (!playing) {
                 // Kuch baj nahi raha — idle service ko band karo.
@@ -2091,7 +2097,7 @@ class PlayerActivity : AppCompatActivity() {
             PlayerService.externalNext = null
             PlayerService.externalPrev = null
         } catch (_: Exception) {}
-        releaseController()
+        releaseEngine()
         super.onDestroy()
     }
 }

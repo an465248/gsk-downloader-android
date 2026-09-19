@@ -60,4 +60,6 @@ dependencies {
     implementation 'androidx.media3:media3-ui:1.4.1'
     // Background play + notification controls (play/pause/next/prev/stop)
     implementation 'androidx.media3:media3-session:1.4.1'
+    // MediaStyle for notification card (compact media controls)
+    implementation 'androidx.media:media:1.6.0'
 }

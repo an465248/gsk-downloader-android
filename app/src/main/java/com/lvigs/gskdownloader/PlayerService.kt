@@ -28,6 +28,7 @@ import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.google.common.collect.ImmutableList
+import androidx.media3.session.MediaController
 
 /**
  * Background player (Media3 MediaSessionService):
@@ -335,7 +336,7 @@ class PlayerService : MediaSessionService() {
                 return START_STICKY
             }
         }
-        return super.onStartCommand(intent, flags, startId)
+        return START_NOT_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -395,6 +396,7 @@ class PlayerService : MediaSessionService() {
                     .setOngoing(playing)
                     .setOnlyAlertOnce(true)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    
                     .addAction(android.R.drawable.ic_media_previous, "Previous", actionIntent(ACTION_PREV))
                     .addAction(android.R.drawable.ic_media_rew, "Back 10s", actionIntent(ACTION_REWIND))
                     .addAction(
@@ -417,6 +419,7 @@ class PlayerService : MediaSessionService() {
                     .setOngoing(true)
                     .setOnlyAlertOnce(true)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    
                 try {
                     nb.addAction(android.R.drawable.ic_media_previous, "Previous", actionIntent(ACTION_PREV))
                 } catch (_: Exception) {}

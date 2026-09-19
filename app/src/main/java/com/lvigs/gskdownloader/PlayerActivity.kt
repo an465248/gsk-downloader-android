@@ -172,8 +172,6 @@ class PlayerActivity : AppCompatActivity() {
     private var bgPlayOn: Boolean = true
     private var pipOn: Boolean = true
     private var defaultQuality: String = "Auto"
-    private var longPressSpeed: Boolean = false
-    private var savedSpeedIdx: Int = 3
 
     // YouTube-style zoom: Fit -> Fill -> Crop(Zoom) -> Original (no distortion)
     private val zoomModes = intArrayOf(
@@ -1946,7 +1944,6 @@ class PlayerActivity : AppCompatActivity() {
                 .setTitle("Playback speed (default ${speeds[speedIdx]}x)")
                 .setSingleChoiceItems(labels, speedIdx) { d, which ->
                     speedIdx = which
-                    savedSpeedIdx = which
                     savePlayerSettings()
                     withEngine { try { it.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {} }
                     updateSpeedLabel()
@@ -2183,18 +2180,8 @@ class PlayerActivity : AppCompatActivity() {
                         return false
                     }
                     override fun onLongPress(e: MotionEvent) {
-                        // Long-press = 2x jab tak ungli rahe. Sirf tab jab video
-                        // baj raha ho (pause screen par dabane se 2x atak jata tha).
-                        try {
-                            val playing = try { engine?.isPlaying == true } catch (_: Exception) { false }
-                            if (!playing) return
-                            if (!longPressSpeed) {
-                                longPressSpeed = true
-                                savedSpeedIdx = speedIdx
-                                withEngine { try { it.setPlaybackSpeed(2f) } catch (_: Exception) {} }
-                                flashSeek("2x ▶")
-                            }
-                        } catch (_: Exception) {}
+                        // Long-press disabled for 2x speed per requirement.
+                        // Keep default 1.0f speed. No action.
                     }
                     override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                         // Single tap = YouTube-style overlay show/hide (pause /
@@ -2209,33 +2196,9 @@ class PlayerActivity : AppCompatActivity() {
             playerView.setOnTouchListener { _, ev ->
                 try { scaleDetector?.onTouchEvent(ev) } catch (_: Exception) {}
                 try { gd.onTouchEvent(ev) } catch (_: Exception) {}
-                try {
-                    // UP ke saath CANCEL bhi (ungli slide-off / interrupt) —
-                    // warna 2x speed atak jati thi ("normal nahi ho raha").
-                    if ((ev.action == MotionEvent.ACTION_UP || ev.action == MotionEvent.ACTION_CANCEL) && longPressSpeed) {
-                        endLongPressSpeed()
-                    }
-                } catch (_: Exception) {}
                 false // consume mat karo — play/pause/controller chalta rahe
             }
         } catch (_: Exception) {}
-    }
-
-    // ---------------- SETTINGS (Playback/Player/Background) ----------------
-    /** Long-press 2x se wapas: speed restore + label sync + confirm.
-     *  Har exit-path (UP/CANCEL) se yahi call hota hai taaki speed kabhi atke nahi. */
-    private fun endLongPressSpeed() {
-        try {
-            longPressSpeed = false
-            val idx = savedSpeedIdx.takeIf { it >= 0 } ?: speedIdx
-            if (idx in speeds.indices) speedIdx = idx
-            val s = speeds.getOrNull(speedIdx) ?: 1f
-            withEngine { try { it.setPlaybackSpeed(s) } catch (_: Exception) {} }
-            try { updateSpeedLabel() } catch (_: Exception) {}
-            try { toast(if (s == 1f) "Speed: normal (1x)" else "Speed: ${s}x") } catch (_: Exception) {}
-        } catch (_: Exception) {
-            try { longPressSpeed = false } catch (_: Exception) {}
-        }
     }
 
     private fun playerPrefs() = getSharedPreferences("gsk_player_settings", MODE_PRIVATE)
@@ -2248,7 +2211,6 @@ class PlayerActivity : AppCompatActivity() {
             defaultQuality = p.getString("def_quality", "Auto") ?: "Auto"
             val ds = p.getFloat("def_speed", 1f)
             speedIdx = speeds.indexOfFirst { it == ds }.takeIf { it >= 0 } ?: 3
-            savedSpeedIdx = speedIdx
             keepScreenOn = p.getBoolean("keep_screen", true)
             bgPlayOn = p.getBoolean("bg_play", true)
             pipOn = p.getBoolean("pip", true)

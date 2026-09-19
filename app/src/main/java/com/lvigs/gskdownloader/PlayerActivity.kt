@@ -43,6 +43,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import com.lvigs.gskdownloader.DirectPlayerExtractor
+import com.lvigs.gskdownloader.DirectWatchData
 
 /**
  * Watch screen (v2.1, YouTube jaisa): search + history + ad-free play +
@@ -1292,13 +1297,13 @@ class PlayerActivity : AppCompatActivity() {
 
     // ---------------- EXTRACT + PLAY ----------------
     private fun extractAndPlay(pageUrl: String, freshQueue: Boolean) {
-        if (!pyReady) { toast("Engine taiyaar ho raha hai, ruk jao."); return }
         if (loadingBusy) { toast("Ruko — pichla load ho raha hai..."); return }
         loadingBusy = true
         loadSeq++
         val myLoad = loadSeq
         goBtn.isEnabled = false
-        status("Ad-free link nikal rahe hain... (10-15s)")
+        status("Ad-free link nikal rahe hain... (phone-side, no server)")
+
         // WATCHDOG: 35s me callback na aaye to khud free — "fetch par atka" band.
         try {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -1311,19 +1316,53 @@ class PlayerActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }, 35000)
         } catch (_: Exception) {}
+
+        // TRY 1: Direct phone-side extraction (no server, no cookies, no Python).
+        CoroutineScope(Dispatchers.IO).launch {
+            val directRes = WatchRepository.extractDirect(pageUrl)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (myLoad != loadSeq) return@runOnUiThread
+                directRes.onSuccess { d ->
+                    // Convert DirectWatchData -> WatchData (related empty, fill later)
+                    val data = WatchData(
+                        title = d.title,
+                        pageUrl = d.pageUrl,
+                        thumb = d.thumb,
+                        streamUrl = d.streamUrl,
+                        audioUrl = d.audioUrl,
+                        hasAudio = d.hasAudio,
+                        extractJson = d.extractJson,
+                        related = d.related,
+                    )
+                    loadingBusy = false
+                    try { goBtn.isEnabled = true } catch (_: Exception) {}
+                    onWatchData(data, freshQueue)
+                    // Background: fetch related for queue
+                    try { maybeFetchRelated() } catch (_: Exception) {}
+                }.onFailure { e ->
+                    if (myLoad != loadSeq) return@runOnUiThread
+                    // Bot-blocked or any error -> fall back to server/Python
+                    val isBot = e is DirectPlayerExtractor.BotBlockedException
+                    if (isBot) status("Bot-check aaya — server se try kar rahe hain...")
+                    extractViaServer(pageUrl, freshQueue, myLoad, isBot)
+                }
+            }
+        }
+    }
+
+    /** Fallback: Server /api/extract (Python/yt-dlp + cookies). */
+    private fun extractViaServer(pageUrl: String, freshQueue: Boolean, myLoad: Int, fromBotBlock: Boolean) {
         WatchRepository.extract(pageUrl, cookiePath) { res ->
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                // Purana stale callback naye load ko free na kare.
                 if (myLoad != loadSeq) return@runOnUiThread
-                res.onSuccess { data -> 
+                res.onSuccess { data ->
                     loadingBusy = false
                     try { goBtn.isEnabled = true } catch (_: Exception) {}
-                    onWatchData(data, freshQueue) 
-                }
-                .onFailure { e ->
+                    onWatchData(data, freshQueue)
+                }.onFailure { e ->
                     val msg = (e.message ?: "").take(200)
-                    // Error category parse karo
                     val category = when {
                         msg.startsWith("NETWORK_ERROR:") || msg.startsWith("TEMP_API_ERROR:") -> "RETRY"
                         msg.startsWith("UNAVAILABLE:") -> "UNAVAILABLE"

@@ -1,163 +1,166 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?><!-- v3.1 YouTube-style meta section (NEW, additive).
+     activity_player.xml me <include> se judta hai (player ke theek niche):
+     expandable description, channel row, action pills, comments preview. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/metaRoot"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:background="@color/card"
-    android:padding="12dp">
+    android:orientation="vertical">
 
+    <!-- Expandable description -->
     <TextView
-        android:id="@+id/descText"
+        android:id="@+id/metaDesc"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="@color/txt"
-        android:textSize="12sp"
-        android:maxLines="3"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_card"
         android:ellipsize="end"
-        android:clickable="true"
-        android:focusable="true" />
-
-    <TextView
-        android:id="@+id/seeMore"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="…more"
-        android:textColor="@color/accent"
+        android:maxLines="2"
+        android:padding="10dp"
+        android:text="Description..."
+        android:textColor="@color/txt"
         android:textSize="12sp"
         android:visibility="gone" />
 
-    <!-- Channel row -->
+    <!-- Channel row: avatar + name/subs + Subscribe -->
     <LinearLayout
+        android:id="@+id/metaChannelRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
+        android:layout_marginTop="8dp"
         android:gravity="center_vertical"
-        android:layout_marginTop="8dp">
+        android:orientation="horizontal"
+        android:visibility="gone">
 
         <ImageView
-            android:id="@+id/channelAvatar"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:scaleType="centerCrop"
-            android:background="@drawable/circle_dim" />
+            android:id="@+id/metaAvatar"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="#000000"
+            android:contentDescription="Channel avatar" />
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
             android:orientation="vertical">
 
             <TextView
-                android:id="@+id/channelName"
+                android:id="@+id/metaChannelName"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="Channel"
                 android:textColor="@color/txt"
-                android:textSize="13sp"
+                android:textSize="14sp"
                 android:textStyle="bold" />
 
             <TextView
-                android:id="@+id/channelSubs"
+                android:id="@+id/metaSubs"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:text=""
                 android:textColor="@color/mut"
                 android:textSize="11sp" />
         </LinearLayout>
 
         <Button
-            android:id="@+id/btnSubscribe"
+            android:id="@+id/metaSubBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:background="@drawable/bg_btn"
+            android:minWidth="0dp"
             android:text="Subscribe"
             android:textColor="#04070F"
-            android:textSize="11sp"
+            android:textSize="12sp"
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Action pills -->
+    <!-- Action pills: Like / Dislike / Share / Download -->
     <LinearLayout
+        android:id="@+id/metaPillsRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
+        android:layout_marginTop="8dp"
         android:gravity="center"
-        android:layout_marginTop="8dp">
+        android:orientation="horizontal"
+        android:visibility="gone">
 
         <Button
-            android:id="@+id/btnLike"
-            android:layout_width="wrap_content"
+            android:id="@+id/metaLike"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
             android:background="@drawable/bg_card"
-            android:text="👍 Like"
+            android:minWidth="0dp"
+            android:text="👍"
             android:textColor="@color/txt"
-            android:textSize="11sp" />
+            android:textSize="12sp" />
 
         <Button
-            android:id="@+id/btnDislike"
-            android:layout_width="wrap_content"
+            android:id="@+id/metaDislike"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
             android:background="@drawable/bg_card"
-            android:text="👎 Dislike"
+            android:minWidth="0dp"
+            android:text="👎"
             android:textColor="@color/txt"
-            android:textSize="11sp" />
+            android:textSize="12sp" />
 
         <Button
-            android:id="@+id/btnShare"
-            android:layout_width="wrap_content"
+            android:id="@+id/metaShare"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
             android:background="@drawable/bg_card"
-            android:text="Share"
+            android:minWidth="0dp"
+            android:text="📤 Share"
             android:textColor="@color/txt"
-            android:textSize="11sp" />
+            android:textSize="12sp" />
 
         <Button
-            android:id="@+id/btnCopyLink"
-            android:layout_width="wrap_content"
+            android:id="@+id/metaDl"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
+            android:layout_weight="1"
             android:background="@drawable/bg_card"
-            android:text="🔗"
+            android:minWidth="0dp"
+            android:text="⬇ Save"
             android:textColor="@color/txt"
-            android:textSize="11sp" />
-
-        <Button
-            android:id="@+id/btnComment"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:background="@drawable/bg_card"
-            android:text="💬"
-            android:textColor="@color/txt"
-            android:textSize="11sp" />
+            android:textSize="12sp" />
     </LinearLayout>
 
-    <!-- Comments preview -->
+    <!-- Comments preview card -->
     <LinearLayout
-        android:id="@+id/commentsCard"
+        android:id="@+id/metaCommentsCard"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
         android:layout_marginTop="8dp"
-        android:visibility="gone"
-        android:background="@color/card">
+        android:background="@drawable/bg_card"
+        android:orientation="vertical"
+        android:padding="10dp"
+        android:visibility="gone">
 
         <TextView
-            android:id="@+id/commentsTitle"
-            android:layout_width="match_parent"
+            android:id="@+id/metaCommentsTitle"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Comments"
-            android:textColor="@color/accent"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:padding="8dp" />
+            android:textColor="@color/txt"
+            android:textSize="13sp"
+            android:textStyle="bold" />
 
         <LinearLayout
-            android:id="@+id/commentsList"
+            android:id="@+id/metaCommentsList"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="4dp" />
+            android:layout_marginTop="6dp"
+            android:orientation="vertical" />
     </LinearLayout>
 </LinearLayout>

@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Background play (screen off par bhi audio): CPU awake rakho -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Download progress notification bar me dikhane ke liye (Android 13+ runtime) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Background download: app minimize karne par bhi download zinda rahe -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Background play (notification controls): mediaPlayback foreground type -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -28,11 +33,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Share-sheet: YouTube / Instagram / Facebook / X / Browser -> Share -> GSK Downloader.
+                 Har app text/plain SEND bhejta hai, isliye label ke saath taaki list me naam saaf dikhe. -->
             <intent-filter android:label="@string/app_name">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <!-- Kahi se link kholo (browser / chat app me tap) -> GSK me khule + auto fetch -->
             <intent-filter android:label="@string/app_name">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -45,6 +53,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
             </intent-filter>
+            <!-- Kisi bhi app me text select karke Share/Process -> GSK -->
             <intent-filter android:label="@string/app_name">
                 <action android:name="android.intent.action.PROCESS_TEXT" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -52,16 +61,19 @@
             </intent-filter>
         </activity>
 
+        <!-- In-app IG/FB login (WebView) — cookies auto-save, file-manager ki zaroorat nahi -->
         <activity
             android:name=".LoginActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
+        <!-- Ad-Free Player (v1.9): sidebar se khulta full player, Up-Next auto-play -->
         <activity
             android:name=".PlayerActivity"
             android:exported="false"
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden">
+            <!-- Downloaded/local video (file manager / gallery -> Open with GSK) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -69,6 +81,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Background download service: notification bar progress + app background me bhi zinda -->
+        <service
+            android:name=".GskDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Background player: Back dabane par bhi bajta rahe + notification me
+             Pause/Next/Prev/Stop. Media3 MediaSessionService. -->
         <service
             android:name=".PlayerService"
             android:exported="false"

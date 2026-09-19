@@ -700,7 +700,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
         android:layout_marginBottom="10dp"
-        android:text="v3.0 • thumbnails + background play ke saath"
+        android:text="v3.1 • thumbnails + background play ke saath"
         android:textColor="@color/mut"
         android:textSize="12sp" />
 

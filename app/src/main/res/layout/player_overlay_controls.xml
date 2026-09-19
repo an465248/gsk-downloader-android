@@ -10,19 +10,67 @@
     android:focusable="true"
     android:visibility="gone">
 
-    <!-- Top-right: Settings gear (quality bottom sheet kholta hai) -->
-    <TextView
-        android:id="@+id/ovGear"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:layout_gravity="top|end"
-        android:layout_margin="8dp"
-        android:background="#44000000"
-        android:clickable="true"
-        android:focusable="true"
-        android:gravity="center"
-        android:text="⚙️"
-        android:textSize="20sp" />
+    <!-- Top bar: minimize | autoplay | CC | settings gear -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="6dp">
+
+        <TextView
+            android:id="@+id/ovMin"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="▼"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/ovAutoplay"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="Autoplay ON"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/ovCc"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="CC"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/ovGear"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@drawable/circle_dim"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="⚙️"
+            android:textSize="20sp" />
+    </LinearLayout>
 
     <!-- Center: Rewind 10s | Play/Pause | Forward 10s -->
     <LinearLayout
@@ -36,6 +84,7 @@
             android:id="@+id/ovRew"
             android:layout_width="64dp"
             android:layout_height="64dp"
+            android:background="@drawable/circle_dim"
             android:clickable="true"
             android:focusable="true"
             android:gravity="center"
@@ -48,7 +97,7 @@
             android:layout_height="76dp"
             android:layout_marginStart="18dp"
             android:layout_marginEnd="18dp"
-            android:background="#44000000"
+            android:background="@drawable/circle_dim"
             android:clickable="true"
             android:focusable="true"
             android:gravity="center"
@@ -60,6 +109,7 @@
             android:id="@+id/ovFwd"
             android:layout_width="64dp"
             android:layout_height="64dp"
+            android:background="@drawable/circle_dim"
             android:clickable="true"
             android:focusable="true"
             android:gravity="center"

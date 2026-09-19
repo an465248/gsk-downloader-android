@@ -617,6 +617,61 @@ def _related(url, cookiefile=""):
         return {"results": [], "count": 0}
 
 
+def comments(url, limit=5):
+    """Watch-tab comments preview card ke liye (best-effort).
+    Hamesha JSON string: {results:[{author,text,likes}], count}.
+    Slow/fail ho to khaali list — playback par zero asar (caller background)."""
+    try:
+        return json.dumps(_comments(url, limit), ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return json.dumps({"results": [], "count": 0}, ensure_ascii=False)
+
+
+def _comments(url, limit=5):
+    try:
+        u = (url or "").strip()
+        if not u:
+            return {"results": [], "count": 0}
+        try:
+            limit = max(1, min(int(limit or 5), 10))
+        except Exception:
+            limit = 5
+        fopts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "getcomments": True,
+            "socket_timeout": 8,
+            "retries": 1,
+            "extractor_retries": 1,
+            "http_headers": {"User-Agent": UA},
+        }
+        with yt_dlp.YoutubeDL(fopts) as ydl:
+            info = ydl.extract_info(u, download=False)
+        out = []
+        try:
+            for c in (info.get("comments") or [])[:limit]:
+                if not isinstance(c, dict):
+                    continue
+                txt = (c.get("text") or "").strip()
+                if not txt:
+                    continue
+                try:
+                    likes = int(c.get("like_count") or 0)
+                except Exception:
+                    likes = 0
+                out.append({
+                    "author": c.get("author") or "User",
+                    "text": txt[:300],
+                    "likes": likes,
+                })
+        except Exception:
+            pass
+        return {"results": out, "count": len(out)}
+    except Exception:
+        return {"results": [], "count": 0}
+
+
 def _search(query, limit=12):
     q = (query or "").strip()
     if not q:
@@ -1189,6 +1244,12 @@ def _extract(url, cookiefile="", fast=0):
         "webpage_url": info.get("webpage_url") or url,
         "channel_id": info.get("channel_id") or "",
         "channel_url": info.get("channel_url") or info.get("uploader_url") or "",
+        # NEW (additive, zero extra network — info dict me pehle se hote hain):
+        # Watch-tab meta section (description/channel/subs/likes/views) ke liye.
+        "description": (info.get("description") or "")[:2000],
+        "subscribers": info.get("channel_follower_count") or info.get("subscriber_count") or 0,
+        "like_count": info.get("like_count") or 0,
+        "view_count": info.get("view_count") or 0,
         "formats": formats,
         "best_audio": best_audio,
         "best_audio_mp4": _mini(aud_mp4[0]) if aud_mp4 else best_audio,

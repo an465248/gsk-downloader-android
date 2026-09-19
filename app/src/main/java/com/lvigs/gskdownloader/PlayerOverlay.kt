@@ -36,6 +36,11 @@ class PlayerOverlay(
         val onFullscreen: () -> Unit,
         val onQuality: () -> Unit,
         val seekStepMs: () -> Long,
+        // v3.1 top bar (additive, default no-op taaki purane caller na tootein).
+        val onMinimize: () -> Unit = {},
+        val onToggleAutoplay: () -> Boolean = { true },
+        val autoplayOn: () -> Boolean = { true },
+        val onCc: () -> Unit = {},
     )
 
     private val root: View
@@ -44,6 +49,9 @@ class PlayerOverlay(
     private val btnFwd: TextView
     private val btnGear: TextView
     private val btnFs: TextView
+    private val btnMin: TextView
+    private val btnAutoplay: TextView
+    private val btnCc: TextView
     private val flash: TextView
     private val tvCur: TextView
     private val tvDur: TextView
@@ -66,6 +74,9 @@ class PlayerOverlay(
         btnFwd = v.findViewById(R.id.ovFwd)
         btnGear = v.findViewById(R.id.ovGear)
         btnFs = v.findViewById(R.id.ovFs)
+        btnMin = v.findViewById(R.id.ovMin)
+        btnAutoplay = v.findViewById(R.id.ovAutoplay)
+        btnCc = v.findViewById(R.id.ovCc)
         flash = v.findViewById(R.id.ovFlash)
         tvCur = v.findViewById(R.id.ovCur)
         tvDur = v.findViewById(R.id.ovDur)
@@ -76,6 +87,13 @@ class PlayerOverlay(
         btnFwd.setOnClickListener { doSeekBy(controls.seekStepMs()); poke() }
         btnGear.setOnClickListener { try { controls.onQuality() } catch (_: Exception) {} }
         btnFs.setOnClickListener { try { controls.onFullscreen() } catch (_: Exception) {} }
+        btnMin.setOnClickListener { try { controls.onMinimize() } catch (_: Exception) {} }
+        btnAutoplay.setOnClickListener {
+            try { controls.onToggleAutoplay() } catch (_: Exception) {}
+            try { refresh() } catch (_: Exception) {}
+            poke()
+        }
+        btnCc.setOnClickListener { try { controls.onCc() } catch (_: Exception) {} }
 
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
@@ -186,6 +204,9 @@ class PlayerOverlay(
             val e = engineOf()
             val playing = try { e?.isPlaying == true } catch (_: Exception) { false }
             try { btnPlay.text = if (playing) "⏸" else "▶" } catch (_: Exception) {}
+            try {
+                btnAutoplay.text = if (controls.autoplayOn()) "Autoplay ON" else "Autoplay OFF"
+            } catch (_: Exception) {}
             val d = try { e?.duration ?: C.TIME_UNSET } catch (_: Exception) { C.TIME_UNSET }
             val p = try { e?.currentPosition ?: 0L } catch (_: Exception) { 0L }
             try { tvDur.text = if (d != C.TIME_UNSET && d > 0) fmt(d) else "0:00" } catch (_: Exception) {}

@@ -119,6 +119,56 @@ object WatchRepository {
         }.start()
     }
 
+    /** Comments preview (video chalne KE BAAD background fill, best-effort).
+     *  20s timeout; fail-soft. Playback ko nahi chhoota. */
+    data class Comment(val author: String, val text: String, val likes: Long)
+
+    fun comments(pageUrl: String, cb: (Result<List<Comment>>) -> Unit) {
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun once(r: Result<List<Comment>>) {
+            if (done.compareAndSet(false, true)) {
+                try { cb(r) } catch (_: Exception) {}
+            }
+        }
+        val exec = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val fut: java.util.concurrent.Future<*> = exec.submit {
+            try {
+                val o = JSONObject(
+                    Python.getInstance().getModule("gsk")
+                        .callAttr("comments", pageUrl, 5).toString()
+                )
+                val out = ArrayList<Comment>()
+                try {
+                    val arr = o.optJSONArray("results")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val c = arr.getJSONObject(i)
+                            val t = c.optString("text")
+                            if (t.isNotEmpty()) out.add(Comment(
+                                c.optString("author", "User").ifEmpty { "User" },
+                                t, c.optLong("likes"),
+                            ))
+                        }
+                    }
+                } catch (_: Exception) {}
+                once(Result.success(out))
+            } catch (e: Exception) {
+                once(Result.failure(e))
+            } finally {
+                try { exec.shutdown() } catch (_: Exception) {}
+            }
+        }
+        Thread {
+            try {
+                fut.get(20, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (te: java.util.concurrent.TimeoutException) {
+                try { fut.cancel(true) } catch (_: Exception) {}
+                try { exec.shutdownNow() } catch (_: Exception) {}
+                once(Result.failure(Exception("Comments time-out.")))
+            } catch (_: Exception) {}
+        }.start()
+    }
+
     fun extract(pageUrl: String, cookiePath: String, cb: (Result<WatchData>) -> Unit) {
         extractInternal(pageUrl, cookiePath, fast = 1, cb = cb)
     }

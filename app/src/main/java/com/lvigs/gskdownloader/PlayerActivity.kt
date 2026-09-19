@@ -229,6 +229,8 @@ class PlayerActivity : AppCompatActivity() {
         volumeBar = findViewById(R.id.playerVolumeBar)
         retryBtn = findViewById(R.id.playerRetryBtn)
         settingsBtn = findViewById(R.id.playerSettingsBtn)
+        // v3.1 meta section views (additive — player_meta include).
+        bindMetaViews()
 
         // Fullscreen me bhi ye controls dikhengi (nahi to Exit milta hi nahi):
         // video + seek/volume rows + speed/fullscreen/zoom + quality pills + download.
@@ -512,6 +514,14 @@ class PlayerActivity : AppCompatActivity() {
                     onFullscreen = { toggleFullscreen() },
                     onQuality = { openQualitySheet() },
                     seekStepMs = { seekDurMs },
+                    onMinimize = {
+                        try {
+                            if (isFullscreen) toggleFullscreen() else finish()
+                        } catch (_: Exception) {}
+                    },
+                    onToggleAutoplay = { toggleAutoplayOverlay() },
+                    autoplayOn = { autoNextOn },
+                    onCc = { toast("CC: is video me subtitles available nahi hain.") },
                 ),
             )
         } catch (_: Exception) {}
@@ -526,6 +536,16 @@ class PlayerActivity : AppCompatActivity() {
                 if (e.isPlaying) e.pause() else e.play()
             } catch (_: Exception) {}
         } catch (_: Exception) {}
+    }
+
+    /** Overlay Autoplay toggle -> wahi existing autoNext setting. */
+    private fun toggleAutoplayOverlay(): Boolean {
+        return try {
+            autoNextOn = !autoNextOn
+            savePlayerSettings()
+            toast(if (autoNextOn) "Autoplay ON" else "Autoplay OFF")
+            autoNextOn
+        } catch (_: Exception) { autoNextOn }
     }
 
     /** YouTube-style quality bottom sheet (checkmark + device-capability filter).
@@ -557,6 +577,302 @@ class PlayerActivity : AppCompatActivity() {
             if (i < 0 || i >= qOpts.size) return
             switchQuality(i)
         } catch (_: Exception) {}
+    }
+
+    // ---------------- v3.1 META SECTION (desc/channel/pills/comments, additive) ----------------
+    // Same single engine + existing data (extractJson) + existing actions
+    // (share/download/queue). Like/Dislike/Subscribe local-only (persisted).
+    private var metaDesc: TextView? = null
+    private var metaChannelRow: LinearLayout? = null
+    private var metaAvatar: ImageView? = null
+    private var metaChannelName: TextView? = null
+    private var metaSubs: TextView? = null
+    private var metaSubBtn: Button? = null
+    private var metaPillsRow: LinearLayout? = null
+    private var metaLike: Button? = null
+    private var metaDislike: Button? = null
+    private var metaShare: Button? = null
+    private var metaDl: Button? = null
+    private var metaCommentsCard: LinearLayout? = null
+    private var metaCommentsTitle: TextView? = null
+    private var metaCommentsList: LinearLayout? = null
+    private var metaDescOn = false
+    @Volatile private var commentsBusy = false
+
+    private fun bindMetaViews() {
+        try {
+            metaDesc = findViewById(R.id.metaDesc)
+            metaChannelRow = findViewById(R.id.metaChannelRow)
+            metaAvatar = findViewById(R.id.metaAvatar)
+            metaChannelName = findViewById(R.id.metaChannelName)
+            metaSubs = findViewById(R.id.metaSubs)
+            metaSubBtn = findViewById(R.id.metaSubBtn)
+            metaPillsRow = findViewById(R.id.metaPillsRow)
+            metaLike = findViewById(R.id.metaLike)
+            metaDislike = findViewById(R.id.metaDislike)
+            metaShare = findViewById(R.id.metaShare)
+            metaDl = findViewById(R.id.metaDl)
+            metaCommentsCard = findViewById(R.id.metaCommentsCard)
+            metaCommentsTitle = findViewById(R.id.metaCommentsTitle)
+            metaCommentsList = findViewById(R.id.metaCommentsList)
+            try {
+                metaDesc?.setOnClickListener {
+                    metaDescOn = !metaDescOn
+                    try { metaDesc?.maxLines = if (metaDescOn) 20 else 2 } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+            try { metaSubBtn?.setOnClickListener { toggleSubscribe() } } catch (_: Exception) {}
+            try { metaLike?.setOnClickListener { toggleLike() } } catch (_: Exception) {}
+            try { metaDislike?.setOnClickListener { toggleDislike() } } catch (_: Exception) {}
+            try { metaShare?.setOnClickListener { shareCurrent() } } catch (_: Exception) {}
+            try { metaDl?.setOnClickListener { onDlVideo() } } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    /** Local file me metadata nahi hota — meta section chhupao. */
+    private fun clearMeta() {
+        try {
+            metaDesc?.visibility = View.GONE
+            metaChannelRow?.visibility = View.GONE
+            metaPillsRow?.visibility = View.GONE
+            metaCommentsCard?.visibility = View.GONE
+        } catch (_: Exception) {}
+    }
+
+    /** Video metadata bharo (playback/quality untouched). */
+    private fun fillMeta() {
+        try {
+            val j = curData?.extractJson
+            val page = curPageUrl
+            // Description (expandable).
+            try {
+                val d = j?.optString("description").orEmpty().trim()
+                if (d.isNotEmpty()) {
+                    metaDesc?.text = d
+                    metaDescOn = false
+                    try { metaDesc?.maxLines = 2 } catch (_: Exception) {}
+                    metaDesc?.visibility = View.VISIBLE
+                } else {
+                    metaDesc?.visibility = View.GONE
+                }
+            } catch (_: Exception) {}
+            // Channel row.
+            try {
+                val author = j?.optString("author").orEmpty().ifEmpty { "" }
+                if (author.isNotEmpty()) {
+                    metaChannelName?.text = author
+                    val subs = try { j?.optLong("subscribers") ?: 0L } catch (_: Exception) { 0L }
+                    metaSubs?.text = if (subs > 0) fmtCount(subs, "subscribers") else "Channel"
+                    updateSubBtn()
+                    metaChannelRow?.visibility = View.VISIBLE
+                    val thumb = try { curData?.thumb.orEmpty() } catch (_: Exception) { "" }
+                    metaAvatar?.let { loadAvatar(thumb, it) }
+                } else {
+                    metaChannelRow?.visibility = View.GONE
+                }
+            } catch (_: Exception) {}
+            // Action pills.
+            try {
+                if (page.isNotEmpty()) {
+                    updateLikeBtns()
+                    metaPillsRow?.visibility = View.VISIBLE
+                } else {
+                    metaPillsRow?.visibility = View.GONE
+                }
+            } catch (_: Exception) {}
+            // Comments preview (background, best-effort).
+            try { fetchComments(page) } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    private fun metaKey(kind: String, page: String): String {
+        return try { kind + "_" + page.hashCode().toString() } catch (_: Exception) { kind + "_x" }
+    }
+
+    private fun toggleLike() {
+        try {
+            if (curPageUrl.isEmpty()) return
+            val k = metaKey("like", curPageUrl)
+            val on = !prefs().getBoolean(k, false)
+            prefs().edit().putBoolean(k, on).apply()
+            if (on) prefs().edit().putBoolean(metaKey("dislike", curPageUrl), false).apply()
+            updateLikeBtns()
+            toast(if (on) "Liked ✓" else "Like hataya")
+        } catch (_: Exception) {}
+    }
+
+    private fun toggleDislike() {
+        try {
+            if (curPageUrl.isEmpty()) return
+            val k = metaKey("dislike", curPageUrl)
+            val on = !prefs().getBoolean(k, false)
+            prefs().edit().putBoolean(k, on).apply()
+            if (on) prefs().edit().putBoolean(metaKey("like", curPageUrl), false).apply()
+            updateLikeBtns()
+        } catch (_: Exception) {}
+    }
+
+    private fun updateLikeBtns() {
+        try {
+            val liked = prefs().getBoolean(metaKey("like", curPageUrl), false)
+            val disliked = prefs().getBoolean(metaKey("dislike", curPageUrl), false)
+            val likes = try { curData?.extractJson?.optLong("like_count") ?: 0L } catch (_: Exception) { 0L }
+            metaLike?.text = if (liked) "👍 ${if (likes > 0) fmtCountShort(likes) else "Liked"}"
+                else if (likes > 0) "👍 ${fmtCountShort(likes)}" else "👍 Like"
+            metaDislike?.text = if (disliked) "👎 Disliked" else "👎"
+        } catch (_: Exception) {}
+    }
+
+    private fun toggleSubscribe() {
+        try {
+            val author = curData?.extractJson?.optString("author").orEmpty()
+            if (author.isEmpty()) return
+            val set = prefs().getStringSet("sub_channels", mutableSetOf())?.toMutableSet()
+                ?: mutableSetOf()
+            if (set.contains(author)) {
+                set.remove(author)
+                toast("Unsubscribed: $author")
+            } else {
+                set.add(author)
+                toast("Subscribed ✓: $author")
+            }
+            prefs().edit().putStringSet("sub_channels", set).apply()
+            updateSubBtn()
+        } catch (_: Exception) {}
+    }
+
+    private fun updateSubBtn() {
+        try {
+            val author = curData?.extractJson?.optString("author").orEmpty()
+            val set = prefs().getStringSet("sub_channels", mutableSetOf()) ?: mutableSetOf()
+            val on = author.isNotEmpty() && set.contains(author)
+            metaSubBtn?.text = if (on) "Subscribed ✓" else "Subscribe"
+        } catch (_: Exception) {}
+    }
+
+    private fun shareCurrent() {
+        try {
+            if (curPageUrl.isEmpty()) { toast("Pehle video chalao."); return }
+            shareText(curTitle + "\n" + curPageUrl)
+        } catch (_: Exception) {}
+    }
+
+    private fun fmtCount(n: Long, suffix: String): String {
+        return try {
+            when {
+                n >= 10000000 -> "%.1fCr $suffix".format(n / 10000000.0)
+                n >= 100000 -> "%.1fL $suffix".format(n / 100000.0)
+                n >= 1000 -> "%.1fK $suffix".format(n / 1000.0)
+                n > 0 -> "$n $suffix"
+                else -> suffix
+            }
+        } catch (_: Exception) { suffix }
+    }
+
+    private fun fmtCountShort(n: Long): String {
+        return try {
+            when {
+                n >= 10000000 -> "%.1fCr".format(n / 10000000.0)
+                n >= 100000 -> "%.1fL".format(n / 100000.0)
+                n >= 1000 -> "%.1fK".format(n / 1000.0)
+                else -> "$n"
+            }
+        } catch (_: Exception) { "$n" }
+    }
+
+    /** Channel avatar: video thumb ka circle-crop (Glide nahi — existing loader). */
+    private fun loadAvatar(url: String, iv: ImageView) {
+        try {
+            if (url.isEmpty()) return
+            synchronized(thumbCache) { thumbCache[url] }?.let {
+                try { iv.setImageBitmap(circleBmp(it)) } catch (_: Exception) {}
+                return
+            }
+            Thread {
+                try {
+                    val req = Request.Builder().url(url)
+                        .header("User-Agent", UA).build()
+                    thumbHttp.newCall(req).execute().use { res ->
+                        if (!res.isSuccessful) return@use
+                        val bytes = res.body?.bytes() ?: return@use
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@use
+                        try {
+                            synchronized(thumbCache) { thumbCache[url] = bmp }
+                        } catch (_: Exception) {}
+                        val circ = try { circleBmp(bmp) } catch (_: Exception) { null } ?: return@use
+                        runOnUiThread { try { iv.setImageBitmap(circ) } catch (_: Exception) {} }
+                    }
+                } catch (_: Exception) {}
+            }.start()
+        } catch (_: Exception) {}
+    }
+
+    private fun circleBmp(src: android.graphics.Bitmap): android.graphics.Bitmap {
+        val s = minOf(src.width, src.height).takeIf { it > 0 } ?: return src
+        val out = android.graphics.Bitmap.createBitmap(s, s, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(out)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        c.drawCircle(s / 2f, s / 2f, s / 2f, paint)
+        paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN)
+        val l = (src.width - s) / 2
+        val t = (src.height - s) / 2
+        c.drawBitmap(src, android.graphics.Rect(l, t, l + s, t + s),
+            android.graphics.Rect(0, 0, s, s), paint)
+        return out
+    }
+
+    /** Comments preview card (background, best-effort, stale-guarded). */
+    private fun fetchComments(page: String) {
+        try {
+            if (page.isEmpty() || commentsBusy) return
+            commentsBusy = true
+            try {
+                metaCommentsCard?.visibility = View.VISIBLE
+                metaCommentsTitle?.text = "Comments (loading...)"
+                metaCommentsList?.removeAllViews()
+            } catch (_: Exception) {}
+            WatchRepository.comments(page) { res ->
+                runOnUiThread {
+                    try { commentsBusy = false } catch (_: Exception) {}
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (page != curPageUrl) return@runOnUiThread
+                    res.onSuccess { list ->
+                        if (page != curPageUrl) return@runOnUiThread
+                        try {
+                            metaCommentsList?.removeAllViews()
+                            if (list.isEmpty()) {
+                                metaCommentsTitle?.text = "Comments (off)"
+                                return@runOnUiThread
+                            }
+                            metaCommentsTitle?.text = "Comments (${list.size})"
+                            for (c in list.take(3)) {
+                                val box = LinearLayout(this)
+                                box.orientation = LinearLayout.VERTICAL
+                                box.setPadding(0, 8, 0, 8)
+                                val a = TextView(this)
+                                val likeTxt = if (c.likes > 0) " • 👍 ${fmtCountShort(c.likes)}" else ""
+                                a.text = "@${c.author}$likeTxt"
+                                a.setTextColor(0xFF22D3EE.toInt())
+                                a.textSize = 12f
+                                val t = TextView(this)
+                                t.text = c.text.take(200)
+                                t.setTextColor(0xFFE9EEFB.toInt())
+                                t.textSize = 13f
+                                box.addView(a)
+                                box.addView(t)
+                                metaCommentsList?.addView(box)
+                            }
+                        } catch (_: Exception) {}
+                    }.onFailure {
+                        try {
+                            if (page == curPageUrl) metaCommentsTitle?.text = "Comments (off)"
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            try { commentsBusy = false } catch (_: Exception) {}
+        }
     }
 
     private fun applySpeed() {
@@ -1133,6 +1449,8 @@ class PlayerActivity : AppCompatActivity() {
         // NEW (additive): fast-play me related khaali hota hai — video chalne KE
         // BAAD background me list bharo. Playback/quality ko nahi chhoota.
         try { maybeFetchRelated() } catch (_: Exception) {}
+        // v3.1 (additive): meta section bharo (desc/channel/pills/comments).
+        try { fillMeta() } catch (_: Exception) {}
     }
 
     /** Related list background fill (playback chalta rehta hai).
@@ -1546,6 +1864,8 @@ class PlayerActivity : AppCompatActivity() {
     private fun playLocalUri(title: String, uri: android.net.Uri) {
         try {
             titleText.text = title
+            // Local file me metadata nahi — meta section chhupao.
+            try { clearMeta() } catch (_: Exception) {}
             try {
                 curTitle = title
                 pendingPlay = PendingPlay(title, "", "", true, 0L, localUri = uri)

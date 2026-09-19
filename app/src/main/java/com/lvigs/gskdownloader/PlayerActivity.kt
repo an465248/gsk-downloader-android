@@ -1,12 +1,13 @@
 package com.lvigs.gskdownloader
 
+import android.Manifest
 import android.app.PictureInPictureParams
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.os.Build
@@ -27,20 +28,13 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.MergingMediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import com.google.common.util.concurrent.ListenableFuture
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -49,6 +43,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import com.lvigs.gskdownloader.DirectPlayerExtractor
+import com.lvigs.gskdownloader.DirectWatchData
 
 /**
  * Watch screen (v2.1, YouTube jaisa): search + history + ad-free play +
@@ -91,16 +90,47 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var speedBtn: Button
     private lateinit var fsBtn: Button
     private lateinit var zoomBtn: Button
+    // Master-prompt rows (10s/Prev/Next/Replay + Volume/Retry/Settings)
+    private lateinit var seekFlash: TextView
+    private lateinit var prevBtn: Button
+    private lateinit var back10Btn: Button
+    private lateinit var replayBtn: Button
+    private lateinit var fwd10Btn: Button
+    private lateinit var nextBtn: Button
+    private lateinit var muteBtn: Button
+    private lateinit var volumeBar: android.widget.SeekBar
+    private lateinit var retryBtn: Button
+    private lateinit var settingsBtn: Button
+    private var audioMgr: android.media.AudioManager? = null
+    private var lastVol: Int = -1
+    private var flashHide: Runnable? = null
+    // YouTube-style overlay (NEW, additive — purane controls untouched).
+    private var ytOverlay: PlayerOverlay? = null
 
-    // Background service ka player (MediaController): activity marne par bhi
-    // bajta rahe + notification controls. exo/wakeLock ki jagah yehi hai.
-    private var controller: MediaController? = null
-    private var controllerFuture: ListenableFuture<MediaController>? = null
-    private val pendingCtrl = ArrayDeque<(MediaController) -> Unit>()
-    // FAIL-SAFE: service 10s me na jude (kisi phone me bind fail ho) to
-    // local player se bajao — video RUKNA nahi chahiye. Status me mode dikhta hai.
-    private var useLocal = false
-    private var localPlayer: ExoPlayer? = null
+    // SINGLE-PLAYER ARCHITECTURE: poori app me playback ka ek hi engine hai —
+    // PlayerService ke andar wala ExoPlayer (merge factory + wake-lock + audio
+    // attrs sahit). Yahan koi doosra ExoPlayer kabhi nahi banega.
+    // Activity (same process) ISI engine ko directly drive karti hai:
+    // PLAY/PAUSE/SEEK/±10s/PREV/NEXT/SPEED/QUALITY sab isi player par jate hain.
+    // MediaSession/lock-screen/notification sirf BRIDGE hain — ye ISI player ko
+    // observe karte hain, khud kuch nahi bajate. Bridge ka fail/timeout/artwork
+    // /permission playback KABHI nahi rokega (koi MediaController-bind dependency
+    // nahi hai — foreground playback seedha engine se chalta hai).
+    // Service engine ka OWNER hai: activity use karti hai, release KABHI nahi karti.
+    private var engine: ExoPlayer? = null
+    private var engineAttached: Boolean = false
+    private var engineWaits: Int = 0
+    // Engine abhi taiyaar na ho to aakhri play-request yahan rehti hai —
+    // taiyaar hote hi ISI player par fire hogi (doosra player nahi banega).
+    private data class PendingPlay(
+        val title: String,
+        val streamUrl: String,
+        val audioUrl: String,
+        val hasAudio: Boolean,
+        val startAtMs: Long,
+        val localUri: android.net.Uri? = null,
+    )
+    private var pendingPlay: PendingPlay? = null
     private var cookiePath: String = ""
     private var pyReady = false
 
@@ -116,6 +146,9 @@ class PlayerActivity : AppCompatActivity() {
     private var curData: WatchData? = null
     private var curPageUrl: String = ""
     private var curTitle: String = "Video"
+    // Aakhri play-request (bind-retry/watchdog isi ko fire karega).
+    // Ye sab user-device par bajta hai (phone CPU/RAM/network) — server sirf
+    // link nikalta hai, stream phone se seedha googlevideo se aata hai.
 
     // search state
     private var lastQuery: String = ""
@@ -126,19 +159,28 @@ class PlayerActivity : AppCompatActivity() {
     private var vPct: Int = 0
     private var aPct: Int = 0
 
-    // player options
-    private val speeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
-    private var speedIdx: Int = 2
+    // player options (master defaults: Auto ON, Resume ON, 1.0x, Keep ON, BG ON)
+    private val speeds = floatArrayOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+    private var speedIdx: Int = 3
     private var isFullscreen: Boolean = false
     private var isInPip: Boolean = false
+    private var seekDurMs: Long = 10_000L
+    private var doubleTapOn: Boolean = true
+    private var autoNextOn: Boolean = true
+    private var resumeOn: Boolean = true
+    private var keepScreenOn: Boolean = true
+    private var bgPlayOn: Boolean = true
+    private var pipOn: Boolean = true
+    private var defaultQuality: String = "Auto"
 
-    // YouTube-style zoom: Fit (poora dikhe) -> Crop (bhar ke dikhe) -> Stretch
+    // YouTube-style zoom: Fit -> Fill -> Crop(Zoom) -> Original (no distortion)
     private val zoomModes = intArrayOf(
         AspectRatioFrameLayout.RESIZE_MODE_FIT,
-        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
         AspectRatioFrameLayout.RESIZE_MODE_FILL,
+        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+        AspectRatioFrameLayout.RESIZE_MODE_FIT,
     )
-    private val zoomLabels = arrayOf("🔍 Fit", "🔍 Crop", "🔍 Stretch")
+    private val zoomLabels = arrayOf("🔍 Fit", "🔍 Fill", "🔍 Crop", "🔍 Orig")
     private var zoomIdx: Int = 0
     private var pinchScale: Float = 1f
     private var scaleDetector: ScaleGestureDetector? = null
@@ -180,10 +222,25 @@ class PlayerActivity : AppCompatActivity() {
         speedBtn = findViewById(R.id.playerSpeedBtn)
         fsBtn = findViewById(R.id.playerFsBtn)
         zoomBtn = findViewById(R.id.playerZoomBtn)
+        seekFlash = findViewById(R.id.playerSeekFlash)
+        prevBtn = findViewById(R.id.playerPrevBtn)
+        back10Btn = findViewById(R.id.playerBack10Btn)
+        replayBtn = findViewById(R.id.playerReplayBtn)
+        fwd10Btn = findViewById(R.id.playerFwd10Btn)
+        nextBtn = findViewById(R.id.playerNextBtn)
+        muteBtn = findViewById(R.id.playerMuteBtn)
+        volumeBar = findViewById(R.id.playerVolumeBar)
+        retryBtn = findViewById(R.id.playerRetryBtn)
+        settingsBtn = findViewById(R.id.playerSettingsBtn)
+        // v3.1 meta section views (additive — player_meta include).
+        bindMetaViews()
 
         // Fullscreen me bhi ye controls dikhengi (nahi to Exit milta hi nahi):
-        // video + speed/fullscreen/zoom + quality pills + download.
-        fsKeep = setOf(R.id.playerCtrlRow, R.id.playerQPillsScroll, R.id.playerDlRow)
+        // video + seek/volume rows + speed/fullscreen/zoom + quality pills + download.
+        fsKeep = setOf(
+            R.id.playerCtrlRow, R.id.playerQPillsScroll, R.id.playerDlRow,
+            R.id.playerSeekRow, R.id.playerSysRow,
+        )
 
         // Back dabane par fullscreen se pehle normal screen par aao (app band nahi).
         onBackPressedDispatcher.addCallback(
@@ -201,17 +258,26 @@ class PlayerActivity : AppCompatActivity() {
         )
 
         // FIX: 1 min baad screen off — video dekhte time screen ON rakho
-        // (YouTube jaisa). PARTIAL_WAKE_LOCK sirf background-audio ke liye
-        // tha; screen ke liye ye flag chahiye. Back par onDestroy me hatt jayega.
-        try { window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } catch (_: Exception) {}
+        // (YouTube jaisa). Setting se OFF ho sakta hai. Pause par flag hattega.
+        loadPlayerSettings()
+        applyKeepScreenOn()
+        updateSpeedLabel()
 
-        // YouTube jaisa zoom: button se Fit/Crop/Stretch + 2-ungli pinch zoom
+        // YouTube jaisa zoom: button se Fit/Fill/Crop/Orig + 2-ungli pinch zoom
         try {
             playerView.resizeMode = zoomModes[zoomIdx]
             zoomBtn.text = zoomLabels[zoomIdx]
         } catch (_: Exception) {}
         zoomBtn.setOnClickListener { cycleZoom() }
-        setupPinchZoom()
+        setupGestures()
+        setupVolumeRow()
+        // NEW (additive): YouTube-style in-video overlay (tap show/hide,
+        // center play/+-10s, seekbar+time, gear=quality sheet, fullscreen).
+        // Purane buttons/gestures untouched rehte hain.
+        try { setupYoutubeOverlay() } catch (_: Exception) {}
+        // Android 13+: media notification ke liye permission (MainActivity me
+        // bhi hai; Player direct khule to yahan se mango — system dialog only).
+        askNotificationPermission()
         ensurePlayerService()
 
         findViewById<Button>(R.id.playerBackBtn).setOnClickListener { finish() }
@@ -232,6 +298,14 @@ class PlayerActivity : AppCompatActivity() {
         }
         speedBtn.setOnClickListener { showSpeedDialog() }
         fsBtn.setOnClickListener { toggleFullscreen() }
+        prevBtn.setOnClickListener { stepQueue(-1) }
+        nextBtn.setOnClickListener { stepQueue(1) }
+        back10Btn.setOnClickListener { seekBy(-seekDurMs) }
+        fwd10Btn.setOnClickListener { seekBy(seekDurMs) }
+        replayBtn.setOnClickListener { replayCurrent() }
+        retryBtn.setOnClickListener { retryCurrent() }
+        settingsBtn.setOnClickListener { showSettingsDialog() }
+        muteBtn.setOnClickListener { toggleMute() }
         dlVideoBtn.setOnClickListener { onDlVideo() }
         dlAudioBtn.setOnClickListener { onDlAudio() }
         cancelDlBtn.setOnClickListener {
@@ -255,6 +329,19 @@ class PlayerActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
                 goBtn.isEnabled = true
+                // Downloaded/local file (ACTION_VIEW video/* ya file Uri) — wahi player me chalao.
+                val viewData = try {
+                    if (intent?.action == Intent.ACTION_VIEW) intent.data else null
+                } catch (_: Exception) { null }
+                if (viewData != null) {
+                    curTitle = try {
+                        viewData.lastPathSegment?.substringAfterLast('/')?.ifEmpty { "Video" } ?: "Video"
+                    } catch (_: Exception) { "Video" }
+                    curPageUrl = viewData.toString()
+                    playLocalUri(curTitle, viewData)
+                    status("📁 Downloaded file chal rahi — ad-free player me.")
+                    return@runOnUiThread
+                }
                 val stream = intent.getStringExtra(EXTRA_STREAM).orEmpty()
                 val page = intent.getStringExtra(EXTRA_PAGE_URL).orEmpty()
                 parseQueue(intent.getStringExtra(EXTRA_QUEUE).orEmpty())
@@ -300,71 +387,511 @@ class PlayerActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** Background service start + MediaController jodo.
-     *  Controller service ke player ko chalata hai — activity band hone par
-     *  bhi playback + notification zinda rehte hain. */
+    /** SINGLE engine taiyaar karo + ISI se jodo (direct, same-process).
+     *  Koi MediaController-bind dependency NAHI — foreground playback seedha
+     *  engine se chalta hai. Bridge (MediaSession/notification/lock-screen)
+     *  service me ISI engine ko observe karta hai, best-effort. */
     private fun ensurePlayerService() {
         try {
-            val i = Intent(this, PlayerService::class.java)
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            startEngineService()
         } catch (_: Exception) {}
         // Notification ke Next/Prev = queue ka agla/pichla (extract karke).
         try {
             PlayerService.externalNext = { runOnUiThread { stepQueue(1) } }
             PlayerService.externalPrev = { runOnUiThread { stepQueue(-1) } }
         } catch (_: Exception) {}
+        // Engine taiyaar hote hi attach (service onCreate se callback aayega).
         try {
-            val token = SessionToken(this, ComponentName(this, PlayerService::class.java))
-            controllerFuture = MediaController.Builder(this, token).buildAsync()
-            controllerFuture?.addListener({
+            PlayerService.onPlayerReady = { runOnUiThread { attachEngine() } }
+        } catch (_: Exception) {}
+        attachEngine()
+        // Watchdog: engine abhi taiyaar na ho to service dobara jagao.
+        // Pending play-request surakshit hai — taiyaar hote hi fire hogi.
+        // Stuck status kabhi nahi: har haal me status aage badhta hai.
+        try {
+            playerRoot.postDelayed({
                 try {
-                    // Watchdog pehle local par shift ho chuka ho to late
-                    // controller ko turant chhodo (double-audio nahi).
-                    if (useLocal) {
-                        try { controllerFuture?.let { MediaController.releaseFuture(it) } } catch (_: Exception) {}
-                        controllerFuture = null
-                        return@addListener
-                    }
-                    controller = controllerFuture?.get()
-                    playerView.player = controller
-                    controller?.addListener(ctrlListener)
-                    applySpeed()
-                    while (true) {
-                        val fn = pendingCtrl.removeFirstOrNull() ?: break
-                        try { fn(controller!!) } catch (_: Exception) {}
+                    if (!engineAttached && !isFinishing && !isDestroyed) {
+                        if (pendingPlay != null) {
+                            status("Player taiyaar ho raha... thoda ruko ya ↻ Retry dabao.")
+                        }
+                        try { startEngineService() } catch (_: Exception) {}
+                        attachEngine()
                     }
                 } catch (_: Exception) {}
-            }, ContextCompat.getMainExecutor(this))
-            // Watchdog: service-bind atak jaye to local player par shift.
+            }, 8000)
+        } catch (_: Exception) {}
+    }
+
+    /** Engine service start karo — FGS se, fail ho to plain start fallback. */
+    private fun startEngineService() {
+        try {
+            val i = Intent(this, PlayerService::class.java)
             try {
-                playerRoot.postDelayed({
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            } catch (_: Exception) {
+                // FGS-start mana ho (rare) to plain start — engine phir bhi banega.
+                try { startService(Intent(this, PlayerService::class.java)) } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+    }
+
+    /** ISI (single) engine se jodo: PlayerView + listener + speed + pending play.
+     *  Engine mar chuka ho (null) to service dobara jagao + thode gap me retry
+     *  (max ~5) — uske baad bhi na bane to status me Retry (kala screen nahi). */
+    private fun attachEngine() {
+        try {
+            if (isFinishing || isDestroyed) return
+            if (engineAttached && engine != null) return
+            val p = try {
+                if (PlayerService.playerReady) PlayerService.playerRef else null
+            } catch (_: Exception) { null }
+            if (p == null) {
+                if (engineWaits < 5) {
+                    engineWaits++
                     try {
-                        if (controller == null && !useLocal && !isFinishing && !isDestroyed) {
-                            useLocal = true
-                            playerView.player = null
-                            toast("Service slow hai — phone player se baja rahe...")
-                            status("Phone player mode (service nahi juda). Video yahin bajega.")
-                        }
+                        playerRoot.postDelayed({
+                            try {
+                                if (!engineAttached && !isFinishing && !isDestroyed) {
+                                    try { startEngineService() } catch (_: Exception) {}
+                                    attachEngine()
+                                }
+                            } catch (_: Exception) {}
+                        }, 2000)
                     } catch (_: Exception) {}
-                }, 10000)
+                } else if (pendingPlay != null) {
+                    status("Player taiyaar nahi hua — ↻ Retry dabao.")
+                }
+                return
+            }
+            engineWaits = 0
+            engine = p
+            engineAttached = true
+            try { playerView.player = p } catch (_: Exception) {}
+            try { p.addListener(engineListener) } catch (_: Exception) {}
+            try { applySpeed() } catch (_: Exception) {}
+            // Atki play-request ISI engine par fire karo.
+            try {
+                pendingPlay?.let { pp ->
+                    pendingPlay = null
+                    firePlayOnEngine(pp)
+                }
             } catch (_: Exception) {}
         } catch (_: Exception) {}
     }
 
-    private fun withController(fn: (MediaController) -> Unit) {
+    /** Engine op (speed/seek type): engine ho to abhi, warna jagao + toast.
+     *  Play-requests isme kabhi nahi aati (pendingPlay alag). */
+    private fun withEngine(fn: (ExoPlayer) -> Unit) {
         try {
-            val c = controller
-            if (c != null) fn(c) else pendingCtrl.add(fn)
+            val e = engine
+            if (e != null && engineAttached) {
+                try { fn(e) } catch (_: Exception) {}
+            } else {
+                try { startEngineService() } catch (_: Exception) {}
+                try { attachEngine() } catch (_: Exception) {}
+            }
         } catch (_: Exception) {}
     }
 
-    private fun applySpeed() {
-        try { controller?.setPlaybackSpeed(speeds[speedIdx]) } catch (_: Exception) {}
+    // ---------------- YOUTUBE-STYLE OVERLAY + QUALITY SHEET (NEW, additive) ----------------
+    // Purana UI/logic untouched — ye sirf nayi layer jodta hai jo SAME single
+    // engine ko chalati hai.
+    private fun setupYoutubeOverlay() {
+        try {
+            // Built-in PlayerView controller hatao taaki YouTube-style overlay
+            // (superset: gear + sleek seekbar + auto-hide) dikhe. Saare purane
+            // custom buttons (prev/10s/next/retry/speed/fs/zoom/pills) vaise hi chalte hain.
+            try { playerView.useController = false } catch (_: Exception) {}
+            try { ytOverlay?.release() } catch (_: Exception) {}
+            ytOverlay = null
+            ytOverlay = PlayerOverlay(
+                this, playerFrame,
+                engineOf = { try { if (engineAttached) engine else null } catch (_: Exception) { null } },
+                controls = PlayerOverlay.Controls(
+                    onTogglePlay = { toggleEnginePlay() },
+                    onSeekBy = { d -> seekBy(d) },
+                    onSeekTo = { pos ->
+                        try { engine?.seekTo(pos) } catch (_: Exception) {}
+                    },
+                    onFullscreen = { toggleFullscreen() },
+                    onQuality = { openQualitySheet() },
+                    seekStepMs = { seekDurMs },
+                    onMinimize = {
+                        try {
+                            if (isFullscreen) toggleFullscreen() else finish()
+                        } catch (_: Exception) {}
+                    },
+                    onToggleAutoplay = { toggleAutoplayOverlay() },
+                    autoplayOn = { autoNextOn },
+                    onCc = { toast("CC: is video me subtitles available nahi hain.") },
+                ),
+            )
+        } catch (_: Exception) {}
     }
 
-    private val ctrlListener = object : Player.Listener {
+    private fun toggleEnginePlay() {
+        try {
+            val e = try {
+                if (engineAttached) engine else null
+            } catch (_: Exception) { null } ?: return
+            try {
+                if (e.isPlaying) e.pause() else e.play()
+            } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    /** Overlay Autoplay toggle -> wahi existing autoNext setting. */
+    private fun toggleAutoplayOverlay(): Boolean {
+        return try {
+            autoNextOn = !autoNextOn
+            savePlayerSettings()
+            toast(if (autoNextOn) "Autoplay ON" else "Autoplay OFF")
+            autoNextOn
+        } catch (_: Exception) { autoNextOn }
+    }
+
+    /** YouTube-style quality bottom sheet (checkmark + device-capability filter).
+     *  Pick -> wahi existing switchQuality(index) (same engine, position-preserve). */
+    private fun openQualitySheet() {
+        try {
+            if (qOpts.isEmpty()) { toast("Quality load ho rahi — video chalne do."); return }
+            val maxH = try { DeviceCaps.maxVideoHeight() } catch (_: Exception) { 1080 }
+            val list = ArrayList<QualitySheet.Item>()
+            for (i in qOpts.indices) {
+                val label = try { qOpts[i].label } catch (_: Exception) { "" }
+                if (label.isEmpty()) continue
+                val h = label.filter { it.isDigit() }.toIntOrNull() ?: 0
+                val special = label.contains("Auto", true) || label.contains("Audio", true) ||
+                    label.contains("🎵") || label.contains("🔇")
+                // Device se upar ki height hatao (MediaCodec error se bachao).
+                // Bina-audio dash (🔇) bhi list me rakho (last-resort, pehle jaisa).
+                if (!special && h > 0 && h > maxH) continue
+                list.add(QualitySheet.Item(i, label))
+            }
+            if (list.isEmpty()) { toast("Koi quality available nahi."); return }
+            QualitySheet.new(list, qSel) { idx -> selectQualityExternal(idx) }
+                .show(supportFragmentManager, "quality")
+        } catch (_: Exception) {}
+    }
+
+    private fun selectQualityExternal(i: Int) {
+        try {
+            if (i < 0 || i >= qOpts.size) return
+            switchQuality(i)
+        } catch (_: Exception) {}
+    }
+
+    // ---------------- v3.1 META SECTION (desc/channel/pills/comments, additive) ----------------
+    // Same single engine + existing data (extractJson) + existing actions
+    // (share/download/queue). Like/Dislike/Subscribe local-only (persisted).
+    private var metaDesc: TextView? = null
+    private var metaChannelRow: LinearLayout? = null
+    private var metaAvatar: ImageView? = null
+    private var metaChannelName: TextView? = null
+    private var metaSubs: TextView? = null
+    private var metaSubBtn: Button? = null
+    private var metaPillsRow: LinearLayout? = null
+    private var metaLike: Button? = null
+    private var metaDislike: Button? = null
+    private var metaShare: Button? = null
+    private var metaDl: Button? = null
+    private var metaCommentsCard: LinearLayout? = null
+    private var metaCommentsTitle: TextView? = null
+    private var metaCommentsList: LinearLayout? = null
+    private var metaDescOn = false
+    @Volatile private var commentsBusy = false
+
+    private fun bindMetaViews() {
+        try {
+            metaDesc = findViewById(R.id.metaDesc)
+            metaChannelRow = findViewById(R.id.metaChannelRow)
+            metaAvatar = findViewById(R.id.metaAvatar)
+            metaChannelName = findViewById(R.id.metaChannelName)
+            metaSubs = findViewById(R.id.metaSubs)
+            metaSubBtn = findViewById(R.id.metaSubBtn)
+            metaPillsRow = findViewById(R.id.metaPillsRow)
+            metaLike = findViewById(R.id.metaLike)
+            metaDislike = findViewById(R.id.metaDislike)
+            metaShare = findViewById(R.id.metaShare)
+            metaDl = findViewById(R.id.metaDl)
+            metaCommentsCard = findViewById(R.id.metaCommentsCard)
+            metaCommentsTitle = findViewById(R.id.metaCommentsTitle)
+            metaCommentsList = findViewById(R.id.metaCommentsList)
+            try {
+                metaDesc?.setOnClickListener {
+                    metaDescOn = !metaDescOn
+                    try { metaDesc?.maxLines = if (metaDescOn) 20 else 2 } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+            try { metaSubBtn?.setOnClickListener { toggleSubscribe() } } catch (_: Exception) {}
+            try { metaLike?.setOnClickListener { toggleLike() } } catch (_: Exception) {}
+            try { metaDislike?.setOnClickListener { toggleDislike() } } catch (_: Exception) {}
+            try { metaShare?.setOnClickListener { shareCurrent() } } catch (_: Exception) {}
+            try { metaDl?.setOnClickListener { onDlVideo() } } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    /** Local file me metadata nahi hota — meta section chhupao. */
+    private fun clearMeta() {
+        try {
+            metaDesc?.visibility = View.GONE
+            metaChannelRow?.visibility = View.GONE
+            metaPillsRow?.visibility = View.GONE
+            metaCommentsCard?.visibility = View.GONE
+        } catch (_: Exception) {}
+    }
+
+    /** Video metadata bharo (playback/quality untouched). */
+    private fun fillMeta() {
+        try {
+            val j = curData?.extractJson
+            val page = curPageUrl
+            // Description (expandable).
+            try {
+                val d = j?.optString("description").orEmpty().trim()
+                if (d.isNotEmpty()) {
+                    metaDesc?.text = d
+                    metaDescOn = false
+                    try { metaDesc?.maxLines = 2 } catch (_: Exception) {}
+                    metaDesc?.visibility = View.VISIBLE
+                } else {
+                    metaDesc?.visibility = View.GONE
+                }
+            } catch (_: Exception) {}
+            // Channel row.
+            try {
+                val author = j?.optString("author").orEmpty().ifEmpty { "" }
+                if (author.isNotEmpty()) {
+                    metaChannelName?.text = author
+                    val subs = try { j?.optLong("subscribers") ?: 0L } catch (_: Exception) { 0L }
+                    metaSubs?.text = if (subs > 0) fmtCount(subs, "subscribers") else "Channel"
+                    updateSubBtn()
+                    metaChannelRow?.visibility = View.VISIBLE
+                    val thumb = try { curData?.thumb.orEmpty() } catch (_: Exception) { "" }
+                    metaAvatar?.let { loadAvatar(thumb, it) }
+                } else {
+                    metaChannelRow?.visibility = View.GONE
+                }
+            } catch (_: Exception) {}
+            // Action pills.
+            try {
+                if (page.isNotEmpty()) {
+                    updateLikeBtns()
+                    metaPillsRow?.visibility = View.VISIBLE
+                } else {
+                    metaPillsRow?.visibility = View.GONE
+                }
+            } catch (_: Exception) {}
+            // Comments preview (background, best-effort).
+            try { fetchComments(page) } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    private fun metaKey(kind: String, page: String): String {
+        return try { kind + "_" + page.hashCode().toString() } catch (_: Exception) { kind + "_x" }
+    }
+
+    private fun toggleLike() {
+        try {
+            if (curPageUrl.isEmpty()) return
+            val k = metaKey("like", curPageUrl)
+            val on = !prefs().getBoolean(k, false)
+            prefs().edit().putBoolean(k, on).apply()
+            if (on) prefs().edit().putBoolean(metaKey("dislike", curPageUrl), false).apply()
+            updateLikeBtns()
+            toast(if (on) "Liked ✓" else "Like hataya")
+        } catch (_: Exception) {}
+    }
+
+    private fun toggleDislike() {
+        try {
+            if (curPageUrl.isEmpty()) return
+            val k = metaKey("dislike", curPageUrl)
+            val on = !prefs().getBoolean(k, false)
+            prefs().edit().putBoolean(k, on).apply()
+            if (on) prefs().edit().putBoolean(metaKey("like", curPageUrl), false).apply()
+            updateLikeBtns()
+        } catch (_: Exception) {}
+    }
+
+    private fun updateLikeBtns() {
+        try {
+            val liked = prefs().getBoolean(metaKey("like", curPageUrl), false)
+            val disliked = prefs().getBoolean(metaKey("dislike", curPageUrl), false)
+            val likes = try { curData?.extractJson?.optLong("like_count") ?: 0L } catch (_: Exception) { 0L }
+            metaLike?.text = if (liked) "👍 ${if (likes > 0) fmtCountShort(likes) else "Liked"}"
+                else if (likes > 0) "👍 ${fmtCountShort(likes)}" else "👍 Like"
+            metaDislike?.text = if (disliked) "👎 Disliked" else "👎"
+        } catch (_: Exception) {}
+    }
+
+    private fun toggleSubscribe() {
+        try {
+            val author = curData?.extractJson?.optString("author").orEmpty()
+            if (author.isEmpty()) return
+            val set = prefs().getStringSet("sub_channels", mutableSetOf())?.toMutableSet()
+                ?: mutableSetOf()
+            if (set.contains(author)) {
+                set.remove(author)
+                toast("Unsubscribed: $author")
+            } else {
+                set.add(author)
+                toast("Subscribed ✓: $author")
+            }
+            prefs().edit().putStringSet("sub_channels", set).apply()
+            updateSubBtn()
+        } catch (_: Exception) {}
+    }
+
+    private fun updateSubBtn() {
+        try {
+            val author = curData?.extractJson?.optString("author").orEmpty()
+            val set = prefs().getStringSet("sub_channels", mutableSetOf()) ?: mutableSetOf()
+            val on = author.isNotEmpty() && set.contains(author)
+            metaSubBtn?.text = if (on) "Subscribed ✓" else "Subscribe"
+        } catch (_: Exception) {}
+    }
+
+    private fun shareCurrent() {
+        try {
+            if (curPageUrl.isEmpty()) { toast("Pehle video chalao."); return }
+            shareText(curTitle + "\n" + curPageUrl)
+        } catch (_: Exception) {}
+    }
+
+    private fun fmtCount(n: Long, suffix: String): String {
+        return try {
+            when {
+                n >= 10000000 -> "%.1fCr $suffix".format(n / 10000000.0)
+                n >= 100000 -> "%.1fL $suffix".format(n / 100000.0)
+                n >= 1000 -> "%.1fK $suffix".format(n / 1000.0)
+                n > 0 -> "$n $suffix"
+                else -> suffix
+            }
+        } catch (_: Exception) { suffix }
+    }
+
+    private fun fmtCountShort(n: Long): String {
+        return try {
+            when {
+                n >= 10000000 -> "%.1fCr".format(n / 10000000.0)
+                n >= 100000 -> "%.1fL".format(n / 100000.0)
+                n >= 1000 -> "%.1fK".format(n / 1000.0)
+                else -> "$n"
+            }
+        } catch (_: Exception) { "$n" }
+    }
+
+    /** Channel avatar: video thumb ka circle-crop (Glide nahi — existing loader). */
+    private fun loadAvatar(url: String, iv: ImageView) {
+        try {
+            if (url.isEmpty()) return
+            synchronized(thumbCache) { thumbCache[url] }?.let {
+                try { iv.setImageBitmap(circleBmp(it)) } catch (_: Exception) {}
+                return
+            }
+            Thread {
+                try {
+                    val req = Request.Builder().url(url)
+                        .header("User-Agent", UA).build()
+                    thumbHttp.newCall(req).execute().use { res ->
+                        if (!res.isSuccessful) return@use
+                        val bytes = res.body?.bytes() ?: return@use
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@use
+                        try {
+                            synchronized(thumbCache) { thumbCache[url] = bmp }
+                        } catch (_: Exception) {}
+                        val circ = try { circleBmp(bmp) } catch (_: Exception) { null } ?: return@use
+                        runOnUiThread { try { iv.setImageBitmap(circ) } catch (_: Exception) {} }
+                    }
+                } catch (_: Exception) {}
+            }.start()
+        } catch (_: Exception) {}
+    }
+
+    private fun circleBmp(src: android.graphics.Bitmap): android.graphics.Bitmap {
+        val s = minOf(src.width, src.height).takeIf { it > 0 } ?: return src
+        val out = android.graphics.Bitmap.createBitmap(s, s, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(out)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        c.drawCircle(s / 2f, s / 2f, s / 2f, paint)
+        paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN)
+        val l = (src.width - s) / 2
+        val t = (src.height - s) / 2
+        c.drawBitmap(src, android.graphics.Rect(l, t, l + s, t + s),
+            android.graphics.Rect(0, 0, s, s), paint)
+        return out
+    }
+
+    /** Comments preview card (background, best-effort, stale-guarded). */
+    private fun fetchComments(page: String) {
+        try {
+            if (page.isEmpty() || commentsBusy) return
+            commentsBusy = true
+            try {
+                metaCommentsCard?.visibility = View.VISIBLE
+                metaCommentsTitle?.text = "Comments (loading...)"
+                metaCommentsList?.removeAllViews()
+            } catch (_: Exception) {}
+            WatchRepository.comments(page) { res ->
+                runOnUiThread {
+                    try { commentsBusy = false } catch (_: Exception) {}
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (page != curPageUrl) return@runOnUiThread
+                    res.onSuccess { list ->
+                        if (page != curPageUrl) return@runOnUiThread
+                        try {
+                            metaCommentsList?.removeAllViews()
+                            if (list.isEmpty()) {
+                                metaCommentsTitle?.text = "Comments (off)"
+                                return@runOnUiThread
+                            }
+                            metaCommentsTitle?.text = "Comments (${list.size})"
+                            for (c in list.take(3)) {
+                                val box = LinearLayout(this)
+                                box.orientation = LinearLayout.VERTICAL
+                                box.setPadding(0, 8, 0, 8)
+                                val a = TextView(this)
+                                val likeTxt = if (c.likes > 0) " • 👍 ${fmtCountShort(c.likes)}" else ""
+                                a.text = "@${c.author}$likeTxt"
+                                a.setTextColor(0xFF22D3EE.toInt())
+                                a.textSize = 12f
+                                val t = TextView(this)
+                                t.text = c.text.take(200)
+                                t.setTextColor(0xFFE9EEFB.toInt())
+                                t.textSize = 13f
+                                box.addView(a)
+                                box.addView(t)
+                                metaCommentsList?.addView(box)
+                            }
+                        } catch (_: Exception) {}
+                    }.onFailure {
+                        try {
+                            if (page == curPageUrl) metaCommentsTitle?.text = "Comments (off)"
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            try { commentsBusy = false } catch (_: Exception) {}
+        }
+    }
+
+    private fun applySpeed() {
+        try { engine?.setPlaybackSpeed(speeds[speedIdx]) } catch (_: Exception) {}
+    }
+
+    /** ISI single engine ka state listener: playing/paused/buffering/position/
+     *  duration/completed/title sab yahin se UI + MediaSession me jata hai. */
+    private val engineListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
             if (state == Player.STATE_ENDED) {
+                // Auto Next ON: agla apne aap; OFF: stop + suggestion.
+                if (!autoNextOn) {
+                    status("Khatm! (Auto Next OFF — Next dabao ya Related se chuno.)")
+                    return
+                }
                 val next = qIndex + 1
                 if (next < queue.size) {
                     try { toast("Agla: ${queue[next].title.take(30)}...") } catch (_: Exception) {}
@@ -373,21 +900,49 @@ class PlayerActivity : AppCompatActivity() {
                     status("Khatm! 🚫 Poora video zero ads ke saath.")
                 }
             }
+            // Keep-screen: pause par normal timeout allow, play par ON.
+            try {
+                val playing = try { engine?.isPlaying ?: false } catch (_: Exception) { false }
+                if (playing && keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else if (!playing) {
+                    // pause par position save (resume ke liye)
+                    try {
+                        if (curPageUrl.isNotEmpty()) {
+                            val p = curPos()
+                            val d = try { engine?.duration ?: 0L } catch (_: Exception) { 0L }
+                            saveResume(curPageUrl, p, d)
+                            curData?.let { saveLastPlayed(it, p) }
+                        }
+                    } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            status("Play error: ${error.message?.take(100)} — dobara Play dabao.")
+            status("Video couldn't be loaded — ↻ Retry dabao. (${error.message?.take(80)})")
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            // Bajna shuru = overlay dikhao (pause/quality/fullscreen/seekbar).
+            // Overlay 3s me khud hide hota hai; tap se wapas aata hai.
+            try { if (isPlaying) ytOverlay?.show() } catch (_: Exception) {}
         }
     }
 
     /** Queue me aage/peeche (notification Next/Prev + buttons sab yahi). */
     private fun stepQueue(dir: Int) {
         try {
-            if (queue.isEmpty()) { toast("Up Next khaali hai."); return }
+            if (queue.isEmpty()) { toast("Next video unavailable."); return }
             var idx = qIndex + dir
             if (idx < 0) idx = 0
             if (idx >= queue.size) idx = queue.size - 1
-            if (idx == qIndex && dir > 0) { toast("Queue khatm."); return }
+            if (idx == qIndex && dir > 0) { toast("Next video unavailable."); return }
+            if (idx == qIndex && dir < 0) {
+                // shuruat me ho to previous, warna beginning rewind (predictable)
+                try {
+                    if (curPos() > 10_000L) { seekBy(-curPos()); return }
+                } catch (_: Exception) {}
+            }
             playQueueItem(idx)
         } catch (_: Exception) {}
     }
@@ -740,13 +1295,13 @@ class PlayerActivity : AppCompatActivity() {
 
     // ---------------- EXTRACT + PLAY ----------------
     private fun extractAndPlay(pageUrl: String, freshQueue: Boolean) {
-        if (!pyReady) { toast("Engine taiyaar ho raha hai, ruk jao."); return }
         if (loadingBusy) { toast("Ruko — pichla load ho raha hai..."); return }
         loadingBusy = true
         loadSeq++
         val myLoad = loadSeq
         goBtn.isEnabled = false
-        status("Ad-free link nikal rahe hain... (10-15s)")
+        status("Ad-free link nikal rahe hain... (phone-side, no server)")
+
         // WATCHDOG: 35s me callback na aaye to khud free — "fetch par atka" band.
         try {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -759,38 +1314,61 @@ class PlayerActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }, 35000)
         } catch (_: Exception) {}
+
+        // TRY 1: Direct phone-side extraction (no server, no cookies, no Python).
+        CoroutineScope(Dispatchers.IO).launch {
+            val directRes = WatchRepository.extractDirect(pageUrl)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (myLoad != loadSeq) return@runOnUiThread
+                directRes.onSuccess { d ->
+                    // Convert DirectWatchData -> WatchData (related empty, fill later)
+                    val data = WatchData(
+                        title = d.title,
+                        pageUrl = d.pageUrl,
+                        thumb = d.thumb,
+                        streamUrl = d.streamUrl,
+                        audioUrl = d.audioUrl,
+                        hasAudio = d.hasAudio,
+                        extractJson = d.extractJson,
+                        related = d.related,
+                    )
+                    loadingBusy = false
+                    try { goBtn.isEnabled = true } catch (_: Exception) {}
+                    onWatchData(data, freshQueue)
+                    // Background: fetch related for queue
+                    try { maybeFetchRelated() } catch (_: Exception) {}
+                }.onFailure { e ->
+                    if (myLoad != loadSeq) return@runOnUiThread
+                    // Bot-blocked or any error -> fall back to server/Python
+                    val isBot = e is DirectPlayerExtractor.BotBlockedException
+                    if (isBot) status("Bot-check aaya — server se try kar rahe hain...")
+                    extractViaServer(pageUrl, freshQueue, myLoad, isBot)
+                }
+            }
+        }
+    }
+
+    /** Fallback: Server /api/extract (Python/yt-dlp + cookies). */
+    private fun extractViaServer(pageUrl: String, freshQueue: Boolean, myLoad: Int, fromBotBlock: Boolean) {
         WatchRepository.extract(pageUrl, cookiePath) { res ->
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                // Purana stale callback naye load ko free na kare.
                 if (myLoad != loadSeq) return@runOnUiThread
-                res.onSuccess { data -> 
+                res.onSuccess { data ->
                     loadingBusy = false
                     try { goBtn.isEnabled = true } catch (_: Exception) {}
-                    onWatchData(data, freshQueue) 
-                }
-                .onFailure { e ->
-                    val msg = (e.message ?: "").take(120)
-                    // SERVER-FALLBACK: phone slow/wall ho to server se nikalo
-                    // (admin cookies se IG bhi bina-login). Download phir bhi phone par.
-                    if (getServerBase().isNotEmpty() && myLoad == loadSeq) {
-                        status("Phone se slow — server se try... ")
-                        Thread {
-                            val sd = fetchWatchViaServer(pageUrl)
-                            runOnUiThread {
-                                if (isFinishing || isDestroyed) return@runOnUiThread
-                                if (myLoad != loadSeq) return@runOnUiThread
-                                loadingBusy = false
-                                try { goBtn.isEnabled = true } catch (_: Exception) {}
-                                if (sd != null) onWatchData(sd, freshQueue)
-                                else status("Error: $msg")
-                            }
-                        }.start()
-                    } else {
-                        loadingBusy = false
-                        try { goBtn.isEnabled = true } catch (_: Exception) {}
-                        status("Error: $msg")
+                    onWatchData(data, freshQueue)
+                }.onFailure { e ->
+                    val msg = (e.message ?: "").take(200)
+                    val category = when {
+                        msg.startsWith("NETWORK_ERROR:") || msg.startsWith("TEMP_API_ERROR:") -> "RETRY"
+                        msg.startsWith("UNAVAILABLE:") -> "UNAVAILABLE"
+                        msg.startsWith("AUTH_REQUIRED:") -> "AUTH"
+                        msg.startsWith("EXPIRED:") -> "EXPIRED"
+                        else -> "ERROR"
                     }
+                    showErrorState(msg, category, pageUrl)
                 }
             }
         }
@@ -876,15 +1454,87 @@ class PlayerActivity : AppCompatActivity() {
             queue = listOf(VideoItem("", data.title, data.pageUrl, data.thumb, 0)) + data.related
             qIndex = 0
         }
-        setQOpts(buildQOpts(data.extractJson), 0)
-        playStream(data.title, data.streamUrl, data.audioUrl, data.hasAudio)
+        val opts = buildQOpts(data.extractJson)
+        // Default quality (Auto/BEST/specific) — settings se.
+        var sel = 0
+        try {
+            if (defaultQuality.equals("Auto", true)) {
+                sel = opts.indexOfFirst { it.label.startsWith("Auto") }.takeIf { it >= 0 } ?: 0
+            } else {
+                val wanted = defaultQuality.filter { it.isDigit() }.toIntOrNull() ?: 0
+                if (wanted > 0) {
+                    var best = -1
+                    for (i in opts.indices) {
+                        val h = opts[i].label.filter { it.isDigit() }.toIntOrNull() ?: 0
+                        if (h in 1..wanted && (best < 0 || h > (opts[best].label.filter { it.isDigit() }.toIntOrNull() ?: 0))) best = i
+                    }
+                    if (best >= 0) sel = best
+                }
+            }
+        } catch (_: Exception) {}
+        setQOpts(opts, sel)
+        // Resume: बीच में छोड़ा था तो पूछो — "Resume from 12:35?"
+        val resumeAt = if (resumeOn) loadResume(curPageUrl) else 0L
+        if (sel < opts.size) {
+            val q = opts[sel]
+            if (resumeAt > 10_000L) {
+                askResume(resumeAt) { at ->
+                    playStream(data.title, q.url, q.audioUrl, q.hasAudio, at)
+                    saveLastPlayed(data, at)
+                }
+            } else {
+                playStream(data.title, data.streamUrl, data.audioUrl, data.hasAudio)
+            }
+        } else {
+            playStream(data.title, data.streamUrl, data.audioUrl, data.hasAudio)
+        }
         renderQueue()
+        // NEW (additive): fast-play me related khaali hota hai — video chalne KE
+        // BAAD background me list bharo. Playback/quality ko nahi chhoota.
+        try { maybeFetchRelated() } catch (_: Exception) {}
+        // v3.1 (additive): meta section bharo (desc/channel/pills/comments).
+        try { fillMeta() } catch (_: Exception) {}
     }
 
-    // ---------------- QUALITY PILLS (kitne pixel par dekhna hai) ----------------
-    // YouTube jaisa: har height (1080p/720p/...) ek pill. Progressive ho to
-    // seedha, video-only (DASH) ho to audio-track merge karke (ExoPlayer
-    // MergingMediaSource) — awaaz HAMESHA aayegi, quality aap chuno.
+    /** Related list background fill (playback chalta rehta hai).
+     *  Stale-guard: beech me agla video lag gaya to purani list mat lagao. */
+    @Volatile private var relatedBusy = false
+
+    private fun maybeFetchRelated() {
+        try {
+            if (!pyReady) return
+            if (queue.isNotEmpty()) return
+            if (relatedBusy) return
+            val page = curPageUrl
+            if (page.isEmpty()) return
+            relatedBusy = true
+            WatchRepository.related(page, cookiePath) { res ->
+                runOnUiThread {
+                    try { relatedBusy = false } catch (_: Exception) {}
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (page != curPageUrl) return@runOnUiThread
+                    if (queue.isNotEmpty()) return@runOnUiThread
+                    res.onSuccess { list ->
+                        if (list.isEmpty()) return@runOnUiThread
+                        if (queue.isNotEmpty()) return@runOnUiThread
+                        if (page != curPageUrl) return@runOnUiThread
+                        queue = listOf(
+                            VideoItem("", curTitle, page, curData?.thumb.orEmpty(), 0),
+                        ) + list
+                        qIndex = 0
+                        renderQueue()
+                        try { status("Related videos mil gaye (${list.size}) — tap karo ▶") } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            try { relatedBusy = false } catch (_: Exception) {}
+        }
+    }
+
+    // ---------------- QUALITY PILLS (Auto + specific, source ke hisab se) ----------------
+    // YouTube jaisa: Auto sabse pehle, phir available heights. Jo source me nahi
+    // hai wo dikhta hi nahi. Current ✓ se indicate. Seamless: position preserve.
     private fun buildQOpts(o: JSONObject): List<QOpt> {
         val out = ArrayList<QOpt>()
         try {
@@ -928,8 +1578,16 @@ class PlayerActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {}
             }
-            val heights = (progByH.keys + dashByH.keys).distinct().sortedDescending().take(6)
+            val heights = (progByH.keys + dashByH.keys).distinct().sortedDescending().take(8)
             val dashNoAudio = ArrayList<Pair<Int, String>>()
+            // Auto = best available (network-friendly: best progressive, else top)
+            try {
+                val autoUrl = progByH[heights.firstOrNull { progByH.containsKey(it) } ?: -1]
+                    ?: dashByH[heights.firstOrNull() ?: -1].orEmpty()
+                val autoAudio = if (progByH.containsKey(heights.firstOrNull { progByH.containsKey(it) } ?: -1)) "" else audioUrl
+                val autoHas = progByH.containsKey(heights.firstOrNull { progByH.containsKey(it) } ?: -1)
+                if (autoUrl.isNotEmpty()) out.add(QOpt("Auto ✓", autoUrl, autoAudio, autoHas))
+            } catch (_: Exception) {}
             for ((idx, h) in heights.withIndex()) {
                 val pu = progByH[h]
                 if (!pu.isNullOrEmpty()) {
@@ -951,7 +1609,7 @@ class PlayerActivity : AppCompatActivity() {
                     }
                 }
             }
-            if (out.isEmpty()) {
+            if (out.size <= 1) {
                 for ((h, du) in dashNoAudio) out.add(QOpt("${h}p 🔇", du, "", false))
             }
             if (audioOnly.isNotEmpty()) out.add(QOpt("🎵 Audio", audioOnly, "", true))
@@ -967,10 +1625,14 @@ class PlayerActivity : AppCompatActivity() {
             if (opts.isEmpty()) return
             for (i in opts.indices) {
                 val b = Button(this)
-                b.text = opts[i].label
+                // Current ✓ clearly indicate (Auto pehle se ✓ rakhta hai)
+                var label = opts[i].label
+                if (i == sel && !label.contains("✓")) label = "$label ✓"
+                b.text = label
                 b.textSize = 11f
                 b.minWidth = 0
                 b.minimumWidth = 0
+                b.contentDescription = "Quality ${opts[i].label}"
                 if (i == sel) {
                     b.setBackgroundResource(R.drawable.bg_btn)
                     b.setTextColor(0xFF04070F.toInt())
@@ -997,7 +1659,7 @@ class PlayerActivity : AppCompatActivity() {
         // BUG-FIX: quality badalne par video shuru se nahi — wahi position se
         // (YouTube jaisa). Seek prepare ke baad lagta hai.
         val pos = try {
-            controller?.currentPosition ?: localPlayer?.currentPosition ?: 0L
+            engine?.currentPosition ?: 0L
         } catch (_: Exception) { 0L }
         playStream(curTitle, q.url, q.audioUrl, q.hasAudio, pos)
         toast("Quality: ${q.label}")
@@ -1113,7 +1775,7 @@ class PlayerActivity : AppCompatActivity() {
     // ---------------- PLAYER (ad-free + PiP + background) ----------------
     private fun playStream(title: String, streamUrl: String, audioUrl: String, hasAudio: Boolean, startAtMs: Long = 0) {
         try {
-            // naya video = zoom reset (pinch 1x + chosen Fit/Crop mode rakho)
+            // naya video = zoom reset (pinch 1x + chosen mode rakho, Original me scale 1x)
             try {
                 pinchScale = 1f
                 playerView.scaleX = 1f
@@ -1121,101 +1783,279 @@ class PlayerActivity : AppCompatActivity() {
                 playerView.resizeMode = zoomModes[zoomIdx]
             } catch (_: Exception) {}
             titleText.text = title
-            // useLocal (service fail-safe) ho to phone ke andar bajao,
-            // warna background service me (notification ke saath).
-            if (useLocal) {
-                playLocal(title, streamUrl, audioUrl, hasAudio, startAtMs)
+            // SINGLE-PLAYER order: fetch -> ISI engine par item set -> READY ->
+            // play. MediaSession/notification BRIDGE khud sync hota hai
+            // (best-effort) — uska fail/timeout/artwork/permission playback
+            // NAHI rokta (koi bind-dependency nahi).
+            // Stream khali ho to kala screen nahi — turant error dikhao.
+            if (streamUrl.isEmpty()) {
+                loadingBusy = false
+                try { goBtn.isEnabled = true } catch (_: Exception) {}
+                status("Video couldn't be loaded — ↻ Retry dabao. (empty stream)")
                 return
             }
-            // Service ka player use hota hai (background + notification ke liye).
-            // Merge factory service me hai — yahan sirf item bhejo.
-            val item = PlayerService.itemFor(title, bypass(streamUrl), bypass(audioUrl), hasAudio)
-            withController { c ->
-                try {
-                    c.setMediaItem(item, if (startAtMs > 1000) startAtMs else 0)
-                    c.prepare()
-                    c.setPlaybackSpeed(speeds[speedIdx])
-                    c.play()
-                    status("🚫 Ad-Free chal raha hai... (Back = background play, notification se Pause/Next/Stop)")
-                } catch (e: Exception) {
-                    status("Play nahi ho paya: ${e.message?.take(100)}")
-                }
+            // Har play-request yaad rakho (engine-wait isi ko fire karega).
+            try {
+                curTitle = title
+                pendingPlay = PendingPlay(title, streamUrl, audioUrl, hasAudio, startAtMs)
+            } catch (_: Exception) {}
+            val eng = try {
+                if (engineAttached) engine else null
+            } catch (_: Exception) { null }
+            if (eng == null) {
+                // Engine taiyaar ho raha hai — request pending hai, taiyaar hote
+                // hi ISI player par bajegi. Stuck status nahi: wait-retry chalu hai.
+                status("🚫 Ad-Free load ho raha... (player taiyaar ho raha hai)")
+                try { attachEngine() } catch (_: Exception) {}
+                return
+            }
+            try {
+                pendingPlay = null
+                firePlayOnEngine(eng, title, streamUrl, audioUrl, hasAudio, startAtMs)
+            } catch (e: Exception) {
+                android.util.Log.e("GSK-Player", "playStream fire failed", e)
+                status("Video couldn't be loaded — ↻ Retry dabao. (${e.message?.take(80)})")
             }
         } catch (e: Exception) {
-            status("Play nahi ho paya: ${e.message?.take(100)}")
+            android.util.Log.e("GSK-Player", "playStream failed", e)
+            status("Video couldn't be loaded — ↻ Retry dabao. (${e.message?.take(80)})")
         }
     }
 
-    /** Fail-safe local play (service na jude to): activity ke andar ExoPlayer.
-     *  Background/notification nahi milega, lekin video RUKEGA nahi. */
-    private fun playLocal(title: String, streamUrl: String, audioUrl: String, hasAudio: Boolean, startAtMs: Long = 0) {
+    /** ISI (single) engine par media item lagao + bajao.
+     *  Artwork/thumb fail ho to bhi playback START hogi (thumb optional hai).
+     *  Engine mar chuka ho to request pending rakho + dobara jagao. */
+    private fun firePlayOnEngine(
+        eng: ExoPlayer, title: String, streamUrl: String,
+        audioUrl: String, hasAudio: Boolean, startAtMs: Long,
+    ) {
         try {
-            try { localPlayer?.stop() } catch (_: Exception) {}
-            try { localPlayer?.release() } catch (_: Exception) {}
-            localPlayer = null
-            val dsFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent(UA)
-                .setConnectTimeoutMs(15000)
-                .setReadTimeoutMs(15000)
-                .setAllowCrossProtocolRedirects(true)
-            val videoSrc = ProgressiveMediaSource.Factory(dsFactory)
-                .createMediaSource(androidx.media3.common.MediaItem.fromUri(bypass(streamUrl)))
-            val source = if (hasAudio || audioUrl.isEmpty()) {
-                videoSrc
-            } else {
-                val audioSrc = ProgressiveMediaSource.Factory(dsFactory)
-                    .createMediaSource(androidx.media3.common.MediaItem.fromUri(bypass(audioUrl)))
-                MergingMediaSource(videoSrc, audioSrc)
+            val thumb = try { curData?.thumb.orEmpty() } catch (_: Exception) { "" }
+            val item = try {
+                PlayerService.itemFor(title, bypass(streamUrl), bypass(audioUrl), hasAudio, thumb)
+            } catch (_: Exception) {
+                // Artwork/Uri build fail -> thumb ke bina item banao, ruko mat.
+                try {
+                    PlayerService.itemFor(title, bypass(streamUrl), bypass(audioUrl), hasAudio, "")
+                } catch (e2: Exception) {
+                    status("Video couldn't be loaded — ↻ Retry dabao. (${e2.message?.take(80)})")
+                    return
+                }
             }
-            val p = ExoPlayer.Builder(this).build()
-            localPlayer = p
-            try { p.setWakeMode(C.WAKE_MODE_LOCAL) } catch (_: Exception) {}
-            playerView.player = p
-            p.addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    if (state == Player.STATE_ENDED) {
-                        val next = qIndex + 1
-                        if (next < queue.size) {
-                            try { toast("Agla: ${queue[next].title.take(30)}...") } catch (_: Exception) {}
-                            playQueueItem(next)
-                        } else {
-                            status("Khatm! 🚫 Poora video zero ads ke saath.")
-                        }
-                    }
-                }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    status("Play error: ${error.message?.take(100)} — dobara Play dabao.")
-                }
-            })
-            p.setMediaSource(source)
-            p.prepare()
             try {
-                if (startAtMs > 1000) p.seekTo(startAtMs)
-            } catch (_: Exception) {}
-            p.playWhenReady = true
-            p.setPlaybackSpeed(speeds[speedIdx])
-            status("🚫 Ad-Free (phone player) chal raha hai...")
+                eng.setMediaItem(item, if (startAtMs > 1000) startAtMs else 0)
+                eng.prepare()
+                try { eng.setPlaybackSpeed(speeds[speedIdx]) } catch (_: Exception) {}
+                eng.play()
+                try { applyKeepScreenOn() } catch (_: Exception) {}
+                status("🚫 Ad-Free chal raha hai... (Back = background play, notification se ⏮ ⏪ ⏯ ⏩ ⏭)")
+            } catch (e: Exception) {
+                android.util.Log.e("GSK-Player", "engine fire failed", e)
+                // Engine dead -> dobara jagao, request pending rakho.
+                try {
+                    pendingPlay = PendingPlay(title, streamUrl, audioUrl, hasAudio, startAtMs)
+                } catch (_: Exception) {}
+                try {
+                    engineAttached = false
+                    engine = null
+                    startEngineService()
+                    attachEngine()
+                } catch (_: Exception) {}
+                status("🚫 Ad-Free load ho raha... (player taiyaar ho raha hai)")
+            }
         } catch (e: Exception) {
-            status("Play nahi ho paya: ${e.message?.take(100)}")
+            status("Video couldn't be loaded — ↻ Retry dabao. (${e.message?.take(80)})")
+        }
+    }
+
+    /** PendingPlay holder se fire karo (engine-ready/watchdog ke liye). */
+    private fun firePlayOnEngine(pp: PendingPlay) {
+        val e = try {
+            if (engineAttached) engine else null
+        } catch (_: Exception) { null } ?: return
+        try {
+            if (pp.localUri != null) {
+                val item = try {
+                    PlayerService.itemForLocal(pp.title, pp.localUri)
+                } catch (_: Exception) {
+                    status("Video couldn't be loaded — ↻ Retry dabao.")
+                    return
+                }
+                try {
+                    e.setMediaItem(item)
+                    e.prepare()
+                    e.play()
+                    status("📁 Local file chal rahi — ad-free.")
+                } catch (ex: Exception) {
+                    android.util.Log.e("GSK-Player", "engine local fire failed", ex)
+                    try { pendingPlay = pp } catch (_: Exception) {}
+                    try {
+                        engineAttached = false
+                        engine = null
+                        startEngineService()
+                        attachEngine()
+                    } catch (_: Exception) {}
+                }
+                return
+            }
+            firePlayOnEngine(e, pp.title, pp.streamUrl, pp.audioUrl, pp.hasAudio, pp.startAtMs)
+        } catch (_: Exception) {}
+    }
+
+    /** Downloaded local file (file/content Uri) — ISI single engine me.
+     *  Engine taiyaar na ho to request pending rahegi, hote hi bajegi. */
+    private fun playLocalUri(title: String, uri: android.net.Uri) {
+        try {
+            titleText.text = title
+            // Local file me metadata nahi — meta section chhupao.
+            try { clearMeta() } catch (_: Exception) {}
+            try {
+                curTitle = title
+                pendingPlay = PendingPlay(title, "", "", true, 0L, localUri = uri)
+            } catch (_: Exception) {}
+            val e = try {
+                if (engineAttached) engine else null
+            } catch (_: Exception) { null }
+            if (e == null) {
+                status("📁 Local file taiyaar... (player taiyaar ho raha hai)")
+                try { attachEngine() } catch (_: Exception) {}
+                return
+            }
+            try {
+                pendingPlay = null
+                firePlayOnEngine(PendingPlay(title, "", "", true, 0L, localUri = uri))
+            } catch (_: Exception) {
+                status("Video couldn't be loaded — ↻ Retry dabao.")
+            }
+        } catch (_: Exception) {
+            status("Video couldn't be loaded — ↻ Retry dabao.")
         }
     }
 
     private fun showSpeedDialog() {
         try {
-            val labels = speeds.map { if (it == 1f) "Normal" else "${it}x" }.toTypedArray()
+            val labels = speeds.map {
+                when (it) {
+                    1f -> "1.0x (Normal)"
+                    else -> "${it}x"
+                }
+            }.toTypedArray()
             AlertDialog.Builder(this)
-                .setTitle("Playback speed")
+                .setTitle("Playback speed (default ${speeds[speedIdx]}x)")
                 .setSingleChoiceItems(labels, speedIdx) { d, which ->
                     speedIdx = which
-                    withController { try { it.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {} }
-                    try { localPlayer?.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {}
-                    try { speedBtn.text = "${labels[which]} ⚙" } catch (_: Exception) {}
+                    savePlayerSettings()
+                    withEngine { try { it.setPlaybackSpeed(speeds[which]) } catch (_: Exception) {} }
+                    updateSpeedLabel()
                     toast("Speed: ${labels[which]}")
                     d.dismiss()
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
+        } catch (_: Exception) {}
+    }
+
+    private fun updateSpeedLabel() {
+        try {
+            val s = speeds.getOrNull(speedIdx) ?: 1f
+            speedBtn.text = "${if (s == 1f) "1" else s}x ⚙"
+        } catch (_: Exception) {}
+    }
+
+    // ---------------- 10s / Replay / Retry / Volume / Settings ----------------
+    private fun curPos(): Long {
+        return try {
+            engine?.currentPosition ?: 0L
+        } catch (_: Exception) { 0L }
+    }
+
+    private fun seekBy(deltaMs: Long) {
+        try {
+            val e = engine
+            if (e != null && engineAttached) {
+                val dur = try { e.duration } catch (_: Exception) { androidx.media3.common.C.TIME_UNSET }
+                var np = e.currentPosition + deltaMs
+                if (np < 0) np = 0
+                if (dur != androidx.media3.common.C.TIME_UNSET && dur > 0 && np > dur) np = dur
+                e.seekTo(np)
+                flashSeek(if (deltaMs < 0) "↶ ${kotlin.math.abs(deltaMs / 1000)} seconds" else "↷ ${deltaMs / 1000} seconds")
+                return
+            }
+            toast("Player taiyaar ho raha hai, ruko...")
+            try { attachEngine() } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    private fun replayCurrent() {
+        try {
+            withEngine { it.seekTo(0); it.play() }
+            flashSeek("↺ Replay")
+            toast("Replay — shuru se.")
+        } catch (_: Exception) {}
+    }
+
+    private fun retryCurrent() {
+        try {
+            val url = curPageUrl
+            if (url.isEmpty()) { toast("Pehle link paste karo."); return }
+            toast("Retry ho raha...")
+            extractAndPlay(url, false)
+        } catch (_: Exception) {}
+    }
+
+    private fun flashSeek(text: String) {
+        try {
+            seekFlash.text = text
+            seekFlash.visibility = View.VISIBLE
+            seekFlash.removeCallbacks(flashHide)
+            val r = Runnable { try { seekFlash.visibility = View.GONE } catch (_: Exception) {} }
+            flashHide = r
+            seekFlash.postDelayed(r, 900)
+        } catch (_: Exception) {}
+    }
+
+    private fun setupVolumeRow() {
+        try {
+            audioMgr = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+            val am = audioMgr ?: return
+            val max = try { am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) } catch (_: Exception) { 15 }
+            val cur = try { am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) } catch (_: Exception) { max / 2 }
+            volumeBar.max = max
+            volumeBar.progress = cur
+            updateMuteIcon(cur == 0)
+            volumeBar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar?, p: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    try {
+                        am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, p, 0)
+                        updateMuteIcon(p == 0)
+                    } catch (_: Exception) {}
+                }
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {}
+            })
+        } catch (_: Exception) {}
+    }
+
+    private fun updateMuteIcon(muted: Boolean) {
+        try { muteBtn.text = if (muted) "🔇" else "🔊" } catch (_: Exception) {}
+    }
+
+    private fun toggleMute() {
+        try {
+            val am = audioMgr ?: return
+            val cur = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+            if (cur == 0) {
+                val back = if (lastVol > 0) lastVol else am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) / 2
+                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, back, 0)
+                volumeBar.progress = back
+                updateMuteIcon(false)
+            } else {
+                lastVol = cur
+                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
+                volumeBar.progress = 0
+                updateMuteIcon(true)
+            }
         } catch (_: Exception) {}
     }
 
@@ -1290,25 +2130,28 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    // ---------------- ZOOM (button + pinch) ----------------
+    // ---------------- ZOOM (Fit/Fill/Crop/Orig, pinch, double-tap) ----------------
     private fun cycleZoom() {
         try {
             zoomIdx = (zoomIdx + 1) % zoomModes.size
             playerView.resizeMode = zoomModes[zoomIdx]
+            // Original = bilkul 1.0x, bina stretch (aspect preserve, no distortion)
             pinchScale = 1f
             playerView.scaleX = 1f
             playerView.scaleY = 1f
             zoomBtn.text = zoomLabels[zoomIdx]
             toast(when (zoomIdx) {
                 0 -> "Fit — poora video dikhega"
-                1 -> "Crop — screen bhar ke (zoom-in)"
-                else -> "Stretch — khincha hua full"
+                1 -> "Fill — screen bhar ke"
+                2 -> "Crop — zoom-in crop"
+                else -> "Original — asli ratio"
             })
         } catch (_: Exception) {}
     }
 
-    /** 2-ungli pinch: video zoom-in / zoom-out (1.0x – 3.0x). Controller kaam karta rahega. */
-    private fun setupPinchZoom() {
+    /** Gestures: pinch zoom + double-tap L/R ±10s + center double-tap zoom + long-press 2x.
+     *  Single tap consume nahi — PlayerView controller show/hide chalta rahe. */
+    private fun setupGestures() {
         try {
             scaleDetector = ScaleGestureDetector(this,
                 object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -1321,11 +2164,164 @@ class PlayerActivity : AppCompatActivity() {
                         return true
                     }
                 })
+            val gd = android.view.GestureDetector(this,
+                object : android.view.GestureDetector.SimpleOnGestureListener() {
+                    override fun onDoubleTap(e: MotionEvent): Boolean {
+                        if (!doubleTapOn) return false
+                        try {
+                            val w = playerView.width.takeIf { it > 0 } ?: return false
+                            val x = e.x
+                            when {
+                                x < w * 0.4f -> { seekBy(-seekDurMs); return true }
+                                x > w * 0.6f -> { seekBy(seekDurMs); return true }
+                                else -> { cycleZoom(); return true }
+                            }
+                        } catch (_: Exception) {}
+                        return false
+                    }
+                    override fun onLongPress(e: MotionEvent) {
+                        // Long-press disabled for 2x speed per requirement.
+                        // Keep default 1.0f speed. No action.
+                    }
+                    override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                        // Single tap = YouTube-style overlay show/hide (pause /
+                        // quality-gear / fullscreen / seekbar). Built-in controller
+                        // OFF hai, isliye ye tap warna kuch nahi karta tha.
+                        return try {
+                            ytOverlay?.toggle()
+                            true
+                        } catch (_: Exception) { false }
+                    }
+                })
             playerView.setOnTouchListener { _, ev ->
                 try { scaleDetector?.onTouchEvent(ev) } catch (_: Exception) {}
+                try { gd.onTouchEvent(ev) } catch (_: Exception) {}
                 false // consume mat karo — play/pause/controller chalta rahe
             }
         } catch (_: Exception) {}
+    }
+
+    private fun playerPrefs() = getSharedPreferences("gsk_player_settings", MODE_PRIVATE)
+
+    private fun loadPlayerSettings() {
+        try {
+            val p = playerPrefs()
+            autoNextOn = p.getBoolean("auto_next", true)
+            resumeOn = p.getBoolean("resume", true)
+            defaultQuality = p.getString("def_quality", "Auto") ?: "Auto"
+            val ds = p.getFloat("def_speed", 1f)
+            speedIdx = speeds.indexOfFirst { it == ds }.takeIf { it >= 0 } ?: 3
+            keepScreenOn = p.getBoolean("keep_screen", true)
+            bgPlayOn = p.getBoolean("bg_play", true)
+            pipOn = p.getBoolean("pip", true)
+            doubleTapOn = p.getBoolean("double_tap", true)
+            seekDurMs = p.getLong("seek_ms", 10_000L)
+        } catch (_: Exception) {}
+    }
+
+    private fun savePlayerSettings() {
+        try {
+            playerPrefs().edit()
+                .putBoolean("auto_next", autoNextOn)
+                .putBoolean("resume", resumeOn)
+                .putString("def_quality", defaultQuality)
+                .putFloat("def_speed", speeds.getOrNull(speedIdx) ?: 1f)
+                .putBoolean("keep_screen", keepScreenOn)
+                .putBoolean("bg_play", bgPlayOn)
+                .putBoolean("pip", pipOn)
+                .putBoolean("double_tap", doubleTapOn)
+                .putLong("seek_ms", seekDurMs)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun applyKeepScreenOn() {
+        try {
+            if (keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } catch (_: Exception) {}
+    }
+
+    private fun showSettingsDialog() {
+        try {
+            val names = arrayOf("Auto Play Next", "Resume Playback", "Keep Screen ON", "Background Play", "Picture-in-Picture", "Double-Tap Seek")
+            val vals = booleanArrayOf(autoNextOn, resumeOn, keepScreenOn, bgPlayOn, pipOn, doubleTapOn)
+            AlertDialog.Builder(this)
+                .setTitle("Player Settings (ad-free)")
+                .setMultiChoiceItems(names, vals) { _, which, checked ->
+                    when (which) {
+                        0 -> autoNextOn = checked
+                        1 -> resumeOn = checked
+                        2 -> { keepScreenOn = checked; applyKeepScreenOn() }
+                        3 -> bgPlayOn = checked
+                        4 -> pipOn = checked
+                        5 -> doubleTapOn = checked
+                    }
+                }
+                .setSingleChoiceItems(
+                    arrayOf("Default Quality: Auto", "Default Quality: 480p", "Default Quality: 720p", "Default Quality: 1080p"),
+                    when (defaultQuality) { "480p" -> 1; "720p" -> 2; "1080p" -> 3; else -> 0 },
+                ) { _, which ->
+                    defaultQuality = when (which) { 1 -> "480p"; 2 -> "720p"; 3 -> "1080p"; else -> "Auto" }
+                }
+                .setPositiveButton("Save") { d, _ -> savePlayerSettings(); toast("Settings save ✓"); d.dismiss() }
+                .setNegativeButton("Cancel", null)
+                .show()
+        } catch (_: Exception) {}
+    }
+
+    // ---------------- RESUME + LAST PLAYED ----------------
+    private fun resumeKey(url: String): String {
+        return try { "pos_" + url.hashCode().toString() } catch (_: Exception) { "pos_x" }
+    }
+
+    private fun loadResume(url: String): Long {
+        return try { prefs().getLong(resumeKey(url), 0L) } catch (_: Exception) { 0L }
+    }
+
+    private fun saveResume(url: String, pos: Long, dur: Long) {
+        try {
+            // shuru/ant ke 10s chhodo — beech me chhoda tabhi resume pucho
+            if (pos > 10_000L && (dur <= 0 || pos < dur - 10_000L)) {
+                prefs().edit().putLong(resumeKey(url), pos).apply()
+            } else {
+                prefs().edit().remove(resumeKey(url)).apply()
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun saveLastPlayed(data: WatchData, pos: Long) {
+        try {
+            val arr = try { JSONArray(prefs().getString("last_played", "[]") ?: "[]") } catch (_: Exception) { JSONArray() }
+            val obj = JSONObject()
+                .put("t", data.title.take(80))
+                .put("u", data.pageUrl)
+                .put("h", data.thumb)
+                .put("p", pos)
+            // same url upar lao (max 10)
+            val out = JSONArray()
+            out.put(obj)
+            for (i in 0 until arr.length()) {
+                try {
+                    val o = arr.getJSONObject(i)
+                    if (o.optString("u") != data.pageUrl) out.put(o)
+                    if (out.length() >= 10) break
+                } catch (_: Exception) {}
+            }
+            prefs().edit().putString("last_played", out.toString()).apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun askResume(at: Long, go: (Long) -> Unit) {
+        try {
+            val label = fmtDur(at)
+            AlertDialog.Builder(this)
+                .setTitle("Resume from $label?")
+                .setMessage("Pichli baar yahin chhoda tha.")
+                .setPositiveButton("▶ Resume") { d, _ -> go(at); d.dismiss() }
+                .setNegativeButton("↺ Start") { d, _ -> go(0L); d.dismiss() }
+                .show()
+        } catch (_: Exception) { try { go(0L) } catch (_: Exception) {} }
     }
 
     /** Fullscreen/PiP me extra UI chhupao, wapas par dikhao.
@@ -1348,14 +2344,14 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    /** Home dabate hi chhota PiP window (video chalta rehta hai). */
+    /** Home dabate hi chhota PiP window (setting ON ho to, video chalta rehta hai). */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         try {
-            val c = controller
-            val lp = localPlayer
-            val st = c?.playbackState ?: lp?.playbackState ?: Player.STATE_IDLE
-            val ready = c?.playWhenReady ?: lp?.playWhenReady ?: false
+            if (!pipOn) return
+            val e = engine
+            val st = e?.playbackState ?: Player.STATE_IDLE
+            val ready = e?.playWhenReady ?: false
             if (Build.VERSION.SDK_INT >= 26 && st != Player.STATE_IDLE && ready) {
                 val p = PictureInPictureParams.Builder()
                     .setAspectRatio(Rational(16, 9))
@@ -1394,6 +2390,104 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) { "" }
     }
 
+    /** Error category ke hisaab se UI state dikhao — NO BLACK SCREEN. */
+    private fun showErrorState(msg: String, category: String, pageUrl: String) {
+        loadingBusy = false
+        try { goBtn.isEnabled = true } catch (_: Exception) {}
+        runOnUiThread {
+            try {
+                val cleanMsg = if (msg.contains(":")) msg.substringAfter(":").trim() else msg
+                when (category) {
+                    "RETRY" -> {
+                        status("🔄 $cleanMsg — Retry dabao")
+                        showErrorOverlay("🔄 Network/API error", cleanMsg, true) { extractAndPlay(pageUrl, false) }
+                    }
+                    "UNAVAILABLE" -> {
+                        status("⛔ $cleanMsg")
+                        showErrorOverlay("⛔ Video unavailable", cleanMsg, false) {}
+                    }
+                    "AUTH" -> {
+                        status("🔐 $cleanMsg")
+                        showErrorOverlay("🔐 Login/Auth required", cleanMsg, false) {}
+                    }
+                    "EXPIRED" -> {
+                        status("⏳ $cleanMsg")
+                        showErrorOverlay("⏳ Link expired", cleanMsg, true) { extractAndPlay(pageUrl, false) }
+                    }
+                    else -> {
+                        status("❌ $cleanMsg")
+                        showErrorOverlay("❌ Error", cleanMsg, true) { extractAndPlay(pageUrl, false) }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** Player area me error overlay dikhao (black screen ke bajay). */
+    private fun showErrorOverlay(title: String, message: String, showRetry: Boolean, onRetry: () -> Unit) {
+        try {
+            // PlayerView ko hide karo, error message dikhao
+            playerView.visibility = View.GONE
+            // playerFrame ke upar TextView overlay banao
+            val overlay = TextView(this).apply {
+                text = "$title\n$message"
+                textSize = 16f
+                gravity = android.view.Gravity.CENTER
+                setTextColor(0xFFFFFFFF.toInt())
+                setBackgroundColor(0xCC000000.toInt())
+                setPadding(24, 24, 24, 24)
+                id = View.generateViewId()
+                tag = "error_overlay"
+            }
+            val params = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            playerFrame.addView(overlay, params)
+
+            if (showRetry) {
+                val retryBtn = Button(this).apply {
+                    text = "🔄 Retry"
+                    setTextColor(0xFFFFFFFF.toInt())
+                    setBackgroundColor(0xFF22D3EE.toInt())
+                    id = View.generateViewId()
+                    tag = "error_overlay"
+                    setOnClickListener {
+                        playerFrame.removeView(overlay)
+                        playerFrame.removeView(this)
+                        playerView.visibility = View.VISIBLE
+                        onRetry()
+                    }
+                }
+                val btnParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { gravity = android.view.Gravity.CENTER }
+                btnParams.setMargins(0, 120, 0, 0)
+                playerFrame.addView(retryBtn, btnParams)
+            }
+        } catch (_: Exception) {
+            // Fallback: status text me dikhao
+            status("$title: $message")
+        }
+    }
+
+    /** Android 13+ media-notification permission (system dialog only,
+     *  GSK UI me koi change nahi). Bina iske lock-screen/shade card nahi dikhta. */
+    private fun askNotificationPermission() {
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED
+                ) {
+                    ActivityCompat.requestPermissions(
+                        this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 102
+                    )
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun status(s: String) {
         try {
             if (isFinishing || isDestroyed) return
@@ -1411,34 +2505,57 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    /** Activity band ho rahi hai — controller chhodo, lekin playback service
-     *  me chalta rahe (background + notification). Baj NA raha ho to service
-     *  bhi band karo (zombie service nahi). */
-    private fun releaseController() {
-        try { controller?.removeListener(ctrlListener) } catch (_: Exception) {}
+    /** Activity band ho rahi hai — engine se detach karo (view + listener),
+     *  lekin SINGLE engine service me chalta rahe (background + notification).
+     *  Baj NA raha ho to service bhi band karo (zombie service nahi).
+     *  Engine ko release KABHI mat karo — OWNER service hai. */
+    private fun releaseEngine() {
+        try { ytOverlay?.release() } catch (_: Exception) {}
+        ytOverlay = null
+        try { engine?.removeListener(engineListener) } catch (_: Exception) {}
         try { playerView.player = null } catch (_: Exception) {}
-        try { controllerFuture?.let { MediaController.releaseFuture(it) } } catch (_: Exception) {}
-        controller = null
-        controllerFuture = null
-        try { pendingCtrl.clear() } catch (_: Exception) {}
-        try { localPlayer?.stop() } catch (_: Exception) {}
-        try { localPlayer?.release() } catch (_: Exception) {}
-        localPlayer = null
+        engine = null
+        engineAttached = false
+        try { pendingPlay = null } catch (_: Exception) {}
+        engineWaits = 0
+        try { PlayerService.onPlayerReady = null } catch (_: Exception) {}
     }
 
-    // NOTE: onPause me player rokna NAHI — screen off / Home (PiP) / Back par
-    // background audio service me chalta rahe. Stop = notification se.
+    // NOTE: Background ON ho to onPause me player rokna NAHI — screen off /
+    // Home (PiP) / Back par background audio service me chalta rahe.
+    override fun onPause() {
+        super.onPause()
+        try {
+            // position hamesha save (resume + last-played ke liye)
+            if (curPageUrl.isNotEmpty()) {
+                val p = curPos()
+                val d = try { engine?.duration ?: 0L } catch (_: Exception) { 0L }
+                saveResume(curPageUrl, p, d)
+                curData?.let { saveLastPlayed(it, p) }
+            }
+            if (!bgPlayOn) {
+                try { engine?.pause() } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+    }
 
     override fun onDestroy() {
+        try {
+            if (curPageUrl.isNotEmpty()) {
+                val p = curPos()
+                val d = try { engine?.duration ?: 0L } catch (_: Exception) { 0L }
+                saveResume(curPageUrl, p, d)
+            }
+        } catch (_: Exception) {}
         try { WatchDownloader.cancel("wv") } catch (_: Exception) {}
         try { WatchDownloader.cancel("wa") } catch (_: Exception) {}
         try { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } catch (_: Exception) {}
         try { showSystemBars() } catch (_: Exception) {}
         try {
-            val c = controller
+            val e = engine
             val playing = try {
-                c != null && c.playWhenReady &&
-                    (c.playbackState == Player.STATE_BUFFERING || c.playbackState == Player.STATE_READY)
+                e != null && e.playWhenReady &&
+                    (e.playbackState == Player.STATE_BUFFERING || e.playbackState == Player.STATE_READY)
             } catch (_: Exception) { false }
             if (!playing) {
                 // Kuch baj nahi raha — idle service ko band karo.
@@ -1451,7 +2568,7 @@ class PlayerActivity : AppCompatActivity() {
             PlayerService.externalNext = null
             PlayerService.externalPrev = null
         } catch (_: Exception) {}
-        releaseController()
+        releaseEngine()
         super.onDestroy()
     }
 }

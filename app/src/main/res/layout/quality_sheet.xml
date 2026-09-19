@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?><!-- Quality selector bottom sheet container (NEW, additive).
+     Rows QualitySheet.kt me programmatically bante hain (checkmark sahit). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/card"
+    android:orientation="vertical"
+    android:padding="18dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Quality"
+        android:textColor="#E9EEFB"
+        android:textSize="17sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/sheetSub"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="Device ke hisab se available options"
+        android:textColor="#93A0C4"
+        android:textSize="12sp" />
+
+    <LinearLayout
+        android:id="@+id/sheetList"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="vertical" />
+</LinearLayout>

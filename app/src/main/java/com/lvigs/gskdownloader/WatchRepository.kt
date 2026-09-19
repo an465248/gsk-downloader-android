@@ -3,6 +3,9 @@ package com.lvigs.gskdownloader
 import android.content.Context
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Watch-screen item: search result / related video. */
@@ -14,6 +17,18 @@ data class VideoItem(
     val durationSec: Long,
     val channel: String = "",
     val views: Long = 0,
+)
+
+/** Direct extraction result (phone-side, no server/Python). */
+data class DirectWatchData(
+    val title: String,
+    val pageUrl: String,
+    val thumb: String,
+    val streamUrl: String,
+    val audioUrl: String,
+    val hasAudio: Boolean,
+    val extractJson: JSONObject,
+    val related: List<VideoItem> = emptyList(),
 )
 
 /** Extract ka parsed result: player + suggestions + pills ke liye. */
@@ -76,6 +91,95 @@ object WatchRepository {
                 try { fut.cancel(true) } catch (_: Exception) {}
                 try { exec.shutdownNow() } catch (_: Exception) {}
                 once(Result.failure(Exception("Search me 45s lag gaya — net check karke dobara try karo.")))
+            } catch (_: Exception) {}
+        }.start()
+    }
+
+    /** Related/Up-Next (video chalne KE BAAD background fill ke liye).
+     *  Fast-play path related skip karta hai — ye halka fetch list bharta hai.
+     *  Playback/loadingBusy ko nahi chhoota; 25s timeout; fail-soft. */
+    fun related(pageUrl: String, cookiePath: String, cb: (Result<List<VideoItem>>) -> Unit) {
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun once(r: Result<List<VideoItem>>) {
+            if (done.compareAndSet(false, true)) {
+                try { cb(r) } catch (_: Exception) {}
+            }
+        }
+        val exec = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val fut: java.util.concurrent.Future<*> = exec.submit {
+            try {
+                val o = JSONObject(
+                    Python.getInstance().getModule("gsk")
+                        .callAttr("related", pageUrl, cookiePath).toString()
+                )
+                if (o.has("error")) {
+                    once(Result.failure(Exception(o.optString("error"))))
+                    return@submit
+                }
+                once(Result.success(parseItems(o.optJSONArray("results"))))
+            } catch (e: Exception) {
+                once(Result.failure(e))
+            } finally {
+                try { exec.shutdown() } catch (_: Exception) {}
+            }
+        }
+        Thread {
+            try {
+                fut.get(25, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (te: java.util.concurrent.TimeoutException) {
+                try { fut.cancel(true) } catch (_: Exception) {}
+                try { exec.shutdownNow() } catch (_: Exception) {}
+                once(Result.failure(Exception("Related list time-out.")))
+            } catch (_: Exception) {}
+        }.start()
+    }
+
+    /** Comments preview (video chalne KE BAAD background fill, best-effort).
+     *  20s timeout; fail-soft. Playback ko nahi chhoota. */
+    data class Comment(val author: String, val text: String, val likes: Long)
+
+    fun comments(pageUrl: String, cb: (Result<List<Comment>>) -> Unit) {
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun once(r: Result<List<Comment>>) {
+            if (done.compareAndSet(false, true)) {
+                try { cb(r) } catch (_: Exception) {}
+            }
+        }
+        val exec = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val fut: java.util.concurrent.Future<*> = exec.submit {
+            try {
+                val o = JSONObject(
+                    Python.getInstance().getModule("gsk")
+                        .callAttr("comments", pageUrl, 5).toString()
+                )
+                val out = ArrayList<Comment>()
+                try {
+                    val arr = o.optJSONArray("results")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val c = arr.getJSONObject(i)
+                            val t = c.optString("text")
+                            if (t.isNotEmpty()) out.add(Comment(
+                                c.optString("author", "User").ifEmpty { "User" },
+                                t, c.optLong("likes"),
+                            ))
+                        }
+                    }
+                } catch (_: Exception) {}
+                once(Result.success(out))
+            } catch (e: Exception) {
+                once(Result.failure(e))
+            } finally {
+                try { exec.shutdown() } catch (_: Exception) {}
+            }
+        }
+        Thread {
+            try {
+                fut.get(20, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (te: java.util.concurrent.TimeoutException) {
+                try { fut.cancel(true) } catch (_: Exception) {}
+                try { exec.shutdownNow() } catch (_: Exception) {}
+                once(Result.failure(Exception("Comments time-out.")))
             } catch (_: Exception) {}
         }.start()
     }
@@ -188,5 +292,85 @@ object WatchRepository {
             }
         } catch (_: Exception) {}
         return out
+    }
+
+    /** DIRECT phone-side extraction (no server, no Python, no cookies).
+     *  Fetches YouTube watch page with spoofed Android Chrome UA, parses
+     *  ytInitialPlayerResponse, returns direct pre-signed URLs.
+     *  Returns Result.failure(BotBlockedException) if YouTube shows bot-check. */
+    suspend fun extractDirect(pageUrl: String): Result<DirectWatchData> = withContext(Dispatchers.IO) {
+        try {
+            // Extract video ID
+            val id = pageUrl.trim().substringAfterLast("v=").substringBefore("&")
+                .substringAfterLast("/").substringBefore("?")
+            // Direct extraction via DirectPlayerExtractor
+            val playerData = DirectPlayerExtractor.extract(id)
+            // Build extractJson compatible with existing format
+            val json = buildExtractJson(playerData)
+            return@withContext Result.success(DirectWatchData(
+                title = playerData.title.ifEmpty { "Video" },
+                pageUrl = pageUrl,
+                thumb = "", // thumbnail not directly available from playerResponse
+                streamUrl = playerData.bestVideo()?.url ?: "",
+                audioUrl = playerData.bestAudio()?.url ?: "",
+                hasAudio = playerData.bestVideo() != null, // progressive = has audio
+                extractJson = json,
+            ))
+        } catch (e: DirectPlayerExtractor.BotBlockedException) {
+            Result.failure(e)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** Build extractJson from PlayerData (compatible with existing format). */
+    private fun buildExtractJson(data: DirectPlayerExtractor.PlayerData): JSONObject {
+        val o = JSONObject()
+        try {
+            o.put("title", data.title)
+            o.put("webpage_url", "")
+            o.put("thumbnail", "")
+            val formats = JSONArray()
+            // Progressive formats (video+audio)
+            for (s in data.videoStreams) {
+                val f = JSONObject()
+                f.put("url", s.url)
+                f.put("type", "video")
+                f.put("height", s.height)
+                f.put("qualityLabel", s.quality)
+                f.put("mimeType", s.mimeType)
+                f.put("itag", s.itag)
+                f.put("progressive", !s.isAudio)
+                f.put("ext", if (s.mimeType.contains("mp4")) "mp4" else "webm")
+                f.put("vcodec", if (s.mimeType.contains("avc")) "avc1" else "vp9")
+                formats.put(f)
+            }
+            // Audio-only
+            for (s in data.audioStreams) {
+                val f = JSONObject()
+                f.put("url", s.url)
+                f.put("type", "audio")
+                f.put("qualityLabel", s.quality)
+                f.put("mimeType", s.mimeType)
+                f.put("itag", s.itag)
+                f.put("ext", if (s.mimeType.contains("mp4")) "m4a" else "webm")
+                formats.put(f)
+            }
+            o.put("formats", formats)
+            // best_audio
+            data.bestAudio()?.let { a ->
+                val ba = JSONObject()
+                ba.put("url", a.url)
+                ba.put("ext", if (a.mimeType.contains("mp4")) "m4a" else "webm")
+                o.put("best_audio", ba)
+                if (a.mimeType.contains("mp4")) o.put("best_audio_mp4", ba)
+            }
+            // preview_url (first progressive or best video)
+            val preview = data.videoStreams.firstOrNull { !it.isAudio }?.url
+                ?: data.audioStreams.firstOrNull()?.url ?: ""
+            o.put("preview_url", preview)
+            o.put("preview_has_audio", data.videoStreams.firstOrNull { !it.isAudio } != null)
+        } catch (_: Exception) {}
+        return o
     }
 }

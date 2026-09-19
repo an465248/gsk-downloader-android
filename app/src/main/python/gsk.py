@@ -302,49 +302,68 @@ def friendly(e):
     if msg.startswith("ERROR:"):
         msg = msg[6:].strip()
     low = msg.lower()
-    if "snapchat" in low or "snapchat.com" in low:
-        if "unsupported url" in low:
-            return ("Ye Snapchat link support nahi hai. Sirf Spotlight links chalte hain "
-                    "(snapchat.com/spotlight/...). Snapchat app me video kholo → Share → "
-                    "Copy Link karke Spotlight link paste karo.")
-        return ("Snapchat link nahi khula — Spotlight ka public link try karo "
-                "(snapchat.com/spotlight/...). Private/story links supported nahi hain.")
-    if "sign in to confirm" in low or "bot" in low:
-        return "YouTube bot-check laga raha hai. Thodi der ruk kar retry karo."
+
+    # NETWORK ERRORS → Retry
+    if "timed out" in low or "timeout" in low:
+        return "NETWORK_ERROR: Site ne reply nahi diya (timeout). Thoda ruk kar dobara try karo."
+    if "name or service not known" in low or "failed to resolve" in low or "network" in low:
+        return "NETWORK_ERROR: Network error — connection check karke retry karo."
+    if "rate-limit" in low or "rate limited" in low or "try again later" in low:
+        return "NETWORK_ERROR: Site ne temporarily rok lagayi hai. 10-15 min ruk kar retry karo."
+
+    # TEMPORARY API ERRORS → Retry
+    if "http error 5" in low or " 500" in low or " 502" in low or " 503" in low or " 504" in low:
+        return "TEMP_API_ERROR: Server error — thoda ruk kar dobara try karo."
+
+    # VIDEO UNAVAILABLE → Clear error (no retry)
     if "private" in low:
-        return "Ye video private hai — sirf public videos download hoti hain."
+        return "UNAVAILABLE: Ye video private hai — sirf public videos download hoti hain."
+    if "age" in low and "confirm" in low:
+        return "UNAVAILABLE: Age-restricted video supported nahi hai."
+    if "unsupported url" in low:
+        return "UNAVAILABLE: Ye URL supported nahi hai. Direct video link try karo."
+    if "playlist" in low and ("not exist" in low or "does not exist" in low or "not found" in low or "unavailable" in low or "empty" in low):
+        return "UNAVAILABLE: Playlist nahi mili ya private hai — direct video ka link paste karo."
+    if "this video is not available" in low or "video unavailable" in low:
+        return "UNAVAILABLE: Ye video available nahi hai."
+
+    # AUTH / BOT CHECK → Clear error (requires user cookies, no auto-retry)
+    if "sign in to confirm" in low or "bot" in low:
+        return ("AUTH_REQUIRED: YouTube ne bot-check lagaya hai. "
+                "Server ke gsk-downloader/cookies.txt me apne YouTube login cookies dalo: "
+                "Browser me YouTube kholo → login karo → Get cookies.txt extension se export → "
+                "cookies.txt replace karo → ./run.sh restart. Bina login cookies ke YouTube ab allow nahi karta.")
+
+    # LOGIN REQUIRED (Instagram/Facebook)
     if "login required" in low or "log in" in low or "not logged in" in low:
         if "instagram" in low or "instagr.am" in low:
             return _ig_msg()
         if "facebook" in low or "fb" in low:
             return _fb_msg()
-        return "Is video ke liye login chahiye — supported nahi hai."
-    # Instagram login-wall ke ASLI roop (login cookies hi chahiye — verified:
-    # Meta logged-out ko khaali page deta hai, embed me bhi video nahi).
-    if ("empty media response" in low or "cookies-from-browser" in low
-            or "--cookies" in low
-            or ("cannot parse data" in low and ("instagram" in low or "instagr.am" in low))):
-        if "instagram" in low or "instagr.am" in low:
-            return _ig_msg()
-        return "Is video ke liye login chahiye — supported nahi hai."
-    # Facebook "cannot parse data" = page aadhi aayi (UA/variant issue), LOGIN NAHI.
-    # (Verified: public FB videos sd+hd BINA LOGIN ke nikalte hain.)
+        return "AUTH_REQUIRED: Is video ke liye login chahiye — supported nahi hai."
+
+    if "empty media response" in low or ("cannot parse data" in low and "instagram" in low):
+        return ("AUTH_REQUIRED: Instagram ne login-wall lagaya hai. "
+                "Server cookies me Instagram login dalo, phir retry karo.")
+
     if "cannot parse data" in low and ("facebook" in low or "fb" in low):
-        return ("Facebook page poori load nahi hui — dobara Get Video dabao. "
-                "(Public videos bina login ke chalti hain.)")
-    if "rate-limit" in low or "rate limited" in low or "try again later" in low:
-        return "Site ne temporarily rok lagayi hai. 10-15 min ruk kar retry karo."
-    if "playlist" in low and ("not exist" in low or "does not exist" in low
-            or "not found" in low or "unavailable" in low or "empty" in low):
-        return "Playlist nahi mili ya private hai — direct video ka link paste karo."
+        return "TEMP_API_ERROR: Facebook page poori load nahi hui — dobara Get Video dabao. (Public videos bina login ke chalti hain.)"
+
+    if "snapchat" in low or "snapchat.com" in low:
+        if "unsupported url" in low:
+            return ("UNAVAILABLE: Ye Snapchat link support nahi hai. Sirf Spotlight links chalte hain "
+                    "(snapchat.com/spotlight/...). Snapchat app me video kholo → Share → "
+                    "Copy Link karke Spotlight link paste karo.")
+        return ("UNAVAILABLE: Snapchat link nahi khula — Spotlight ka public link try karo "
+                "(snapchat.com/spotlight/...). Private/story links supported nahi hain.")
+
+    if "http error 403" in low or " 403" in low:
+        return "EXPIRED: Link expire ho gaya (403). Dobara Get Video dabao taaki fresh link mile, phir download karo."
+    if "http error 416" in low or "416" in low:
+        return "EXPIRED: Resume fail (416). Dobara fresh link se download karo."
     if "reload" in low and "page" in low:
-        return "Page load nahi hui — net check karke dobara Get Video dabao."
-    if "unsupported url" in low:
-        return "Ye URL supported nahi hai."
-    if "timed out" in low or "timeout" in low:
-        return "Site ne reply nahi diya. Net check karke retry karo."
-    if "http error 403" in low or "403" in low:
-        return "Link expire ho gaya (403). Dobara Get Video dabao taaki fresh link mile, phir download karo."
+        return "TEMP_API_ERROR: Page load nahi hui — net check karke dobara Get Video dabao."
+
     return msg[:300]
 
 
@@ -555,6 +574,102 @@ def search(query, limit=12):
         return json.dumps(_search(query, limit), ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         return json.dumps({"error": friendly(e)}, ensure_ascii=False)
+
+
+def related(url, cookiefile=""):
+    """Watch-tab: video chalne KE BAAD background me Related/Up-Next lao.
+
+    Fast-play path (fast=1) related skip karta hai taaki video turant baje —
+    ye function uske baad halka fetch karke list bharta hai. Hamesha JSON
+    string: {results:[{id,title,url,thumbnail,duration,channel,views}], count}.
+    Fail-soft: khaali list. Playback par zero asar (caller background par chalata hai).
+    """
+    try:
+        return json.dumps(_related(url, cookiefile), ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return json.dumps({"results": [], "count": 0}, ensure_ascii=False)
+
+
+def _related(url, cookiefile=""):
+    try:
+        u = (url or "").strip()
+        if not u:
+            return {"results": [], "count": 0}
+        if _looks_like_playlist(u):
+            try:
+                entries, _t, _c = _flat_playlist_entries(u, cookiefile, 20)
+            except Exception:
+                entries = []
+            entries = entries or []
+            return {"results": entries, "count": len(entries)}
+        vid = ""
+        try:
+            ul = u.lower()
+            if "youtube.com" in ul or "youtu.be" in ul:
+                vid = _parse_youtube_id(u)
+        except Exception:
+            vid = ""
+        if not vid:
+            return {"results": [], "count": 0}
+        out = _youtube_related(vid, 15) or []
+        return {"results": out, "count": len(out)}
+    except Exception:
+        return {"results": [], "count": 0}
+
+
+def comments(url, limit=5):
+    """Watch-tab comments preview card ke liye (best-effort).
+    Hamesha JSON string: {results:[{author,text,likes}], count}.
+    Slow/fail ho to khaali list — playback par zero asar (caller background)."""
+    try:
+        return json.dumps(_comments(url, limit), ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return json.dumps({"results": [], "count": 0}, ensure_ascii=False)
+
+
+def _comments(url, limit=5):
+    try:
+        u = (url or "").strip()
+        if not u:
+            return {"results": [], "count": 0}
+        try:
+            limit = max(1, min(int(limit or 5), 10))
+        except Exception:
+            limit = 5
+        fopts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "getcomments": True,
+            "socket_timeout": 8,
+            "retries": 1,
+            "extractor_retries": 1,
+            "http_headers": {"User-Agent": UA},
+        }
+        with yt_dlp.YoutubeDL(fopts) as ydl:
+            info = ydl.extract_info(u, download=False)
+        out = []
+        try:
+            for c in (info.get("comments") or [])[:limit]:
+                if not isinstance(c, dict):
+                    continue
+                txt = (c.get("text") or "").strip()
+                if not txt:
+                    continue
+                try:
+                    likes = int(c.get("like_count") or 0)
+                except Exception:
+                    likes = 0
+                out.append({
+                    "author": c.get("author") or "User",
+                    "text": txt[:300],
+                    "likes": likes,
+                })
+        except Exception:
+            pass
+        return {"results": out, "count": len(out)}
+    except Exception:
+        return {"results": [], "count": 0}
 
 
 def _search(query, limit=12):
@@ -1129,6 +1244,12 @@ def _extract(url, cookiefile="", fast=0):
         "webpage_url": info.get("webpage_url") or url,
         "channel_id": info.get("channel_id") or "",
         "channel_url": info.get("channel_url") or info.get("uploader_url") or "",
+        # NEW (additive, zero extra network — info dict me pehle se hote hain):
+        # Watch-tab meta section (description/channel/subs/likes/views) ke liye.
+        "description": (info.get("description") or "")[:2000],
+        "subscribers": info.get("channel_follower_count") or info.get("subscriber_count") or 0,
+        "like_count": info.get("like_count") or 0,
+        "view_count": info.get("view_count") or 0,
         "formats": formats,
         "best_audio": best_audio,
         "best_audio_mp4": _mini(aud_mp4[0]) if aud_mp4 else best_audio,

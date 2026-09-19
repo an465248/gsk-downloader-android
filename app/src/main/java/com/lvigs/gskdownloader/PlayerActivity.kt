@@ -1,5 +1,6 @@
 package com.lvigs.gskdownloader
 
+import android.Manifest
 import android.app.PictureInPictureParams
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -7,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.os.Build
@@ -27,6 +29,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -260,6 +263,9 @@ class PlayerActivity : AppCompatActivity() {
         zoomBtn.setOnClickListener { cycleZoom() }
         setupGestures()
         setupVolumeRow()
+        // Android 13+: media notification ke liye permission (MainActivity me
+        // bhi hai; Player direct khule to yahan se mango — system dialog only).
+        askNotificationPermission()
         ensurePlayerService()
 
         findViewById<Button>(R.id.playerBackBtn).setOnClickListener { finish() }
@@ -1267,24 +1273,20 @@ class PlayerActivity : AppCompatActivity() {
                 lastStream = streamUrl; lastAudio = audioUrl
                 lastHasAudio = hasAudio; lastStartMs = startAtMs
             } catch (_: Exception) {}
-            // useLocal (service fail-safe) ho to phone ke andar bajao,
-            // warna background service me (notification ke saath).
+            // REAL player = service player (MediaSession: notification +
+            // lock-screen + background). useLocal sirf tab jab service-bind
+            // 8s watchdog me fail ho — tabhi local fail-safe bajta hai.
             if (useLocal) {
                 playLocal(title, streamUrl, audioUrl, hasAudio, startAtMs)
                 return
             }
-            // FIX ("sirf show hota, play nahi hota"): controller abhi null ho
-            // (service bind me 2-8s lagta hai) to queue me sadne mat do —
-            // turant phone-player se bajao (user CPU/RAM/network, zero wait).
-            // Service jud jaye to agla video/quality service se bajega,
-            // ye wala local chalta rahega (double-audio nahi, rukega nahi).
-            if (controller == null) {
-                playLocal(title, streamUrl, audioUrl, hasAudio, startAtMs)
-                status("🚫 Ad-Free chal raha hai... (phone player, instant)")
-                return
-            }
             // Service ka player use hota hai (background + notification ke liye).
             // Merge factory service me hai — yahan sirf item bhejo (thumb = lock-screen art).
+            // Controller abhi null ho (bind me 1-2s) to withController queue
+            // karega; judte hi service me bajega aur MediaSession notification
+            // placeholder se real media card me badal jayegi. 8s watchdog ke
+            // baad bhi na jude to local replay hoga (ruke nahi).
+            status("🚫 Ad-Free load ho raha... (player jud raha hai)")
             val thumb = try { curData?.thumb.orEmpty() } catch (_: Exception) { "" }
             val item = PlayerService.itemFor(title, bypass(streamUrl), bypass(audioUrl), hasAudio, thumb)
             withController { c ->
@@ -1306,12 +1308,14 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /** Downloaded local file (file/content Uri) — wahi ad-free player me. */
+    /** Downloaded local file (file/content Uri) — wahi ad-free player me.
+     *  Service player me bajao taaki MediaSession (notification/lock-screen)
+     *  mile; useLocal fail-safe par hi local player. */
     private fun playLocalUri(title: String, uri: android.net.Uri) {
         try {
             titleText.text = title
-            // FIX: controller null ho to queue me mat sado — local hi bajao.
-            if (controller == null || useLocal) {
+            // useLocal fail-safe par hi local — warna service (MediaSession).
+            if (useLocal) {
                 try {
                     try { localPlayer?.stop() } catch (_: Exception) {}
                     try { localPlayer?.release() } catch (_: Exception) {}
@@ -1966,6 +1970,22 @@ class PlayerActivity : AppCompatActivity() {
             // Fallback: status text me dikhao
             status("$title: $message")
         }
+    }
+
+    /** Android 13+ media-notification permission (system dialog only,
+     *  GSK UI me koi change nahi). Bina iske lock-screen/shade card nahi dikhta. */
+    private fun askNotificationPermission() {
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED
+                ) {
+                    ActivityCompat.requestPermissions(
+                        this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 102
+                    )
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     private fun status(s: String) {

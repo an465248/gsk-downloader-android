@@ -72,7 +72,14 @@
             android:name=".PlayerActivity"
             android:exported="false"
             android:supportsPictureInPicture="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden">
+            <!-- Downloaded/local video (file manager / gallery -> Open with GSK) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+        </activity>
 
         <!-- Background download service: notification bar progress + app background me bhi zinda -->
         <service

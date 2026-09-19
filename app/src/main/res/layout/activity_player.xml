@@ -75,6 +75,20 @@
             android:layout_height="match_parent"
             app:show_buffering="when_playing"
             app:use_controller="true" />
+
+        <!-- Double-tap seek flash animation (↶ 10 seconds / ↷ 10 seconds) -->
+        <TextView
+            android:id="@+id/playerSeekFlash"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="#CC000000"
+            android:padding="12dp"
+            android:text="↶ 10 seconds"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
     </FrameLayout>
 
     <TextView
@@ -85,6 +99,128 @@
         android:text="Taiyaar hai."
         android:textColor="@color/mut"
         android:textSize="12sp" />
+
+    <!-- 10-sec + Prev/Next + Replay row (player ke andar wale controls jaisa) -->
+    <LinearLayout
+        android:id="@+id/playerSeekRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/playerPrevBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:contentDescription="Previous video"
+            android:text="⏮"
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/playerBack10Btn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:contentDescription="10 seconds back"
+            android:text="⏪10s"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/playerReplayBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:contentDescription="Replay from beginning"
+            android:text="↺"
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/playerFwd10Btn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:contentDescription="10 seconds forward"
+            android:text="10s⏩"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/playerNextBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:contentDescription="Next video"
+            android:text="⏭"
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- Volume + Retry + Settings row -->
+    <LinearLayout
+        android:id="@+id/playerSysRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/playerMuteBtn"
+            android:layout_width="48dp"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:contentDescription="Mute or unmute"
+            android:minWidth="0dp"
+            android:text="🔊"
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
+
+        <SeekBar
+            android:id="@+id/playerVolumeBar"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:contentDescription="Volume" />
+
+        <Button
+            android:id="@+id/playerRetryBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_card"
+            android:contentDescription="Retry loading video"
+            android:minWidth="0dp"
+            android:text="↻ Retry"
+            android:textColor="@color/txt"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/playerSettingsBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_card"
+            android:contentDescription="Player settings"
+            android:minWidth="0dp"
+            android:text="⚙"
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
+    </LinearLayout>
 
     <!-- Quality pills (play ke dauran bhi — fullscreen me bhi dikhengi) -->
     <HorizontalScrollView

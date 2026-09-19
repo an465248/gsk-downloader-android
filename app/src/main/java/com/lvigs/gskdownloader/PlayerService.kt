@@ -47,7 +47,11 @@ class PlayerService : MediaSessionService() {
         const val ACTION_TOGGLE = "gsk.action.TOGGLE"
         const val ACTION_NEXT = "gsk.action.NEXT"
         const val ACTION_PREV = "gsk.action.PREV"
+        const val ACTION_REWIND = "gsk.action.REWIND"
+        const val ACTION_FF = "gsk.action.FF"
         const val EXTRA_AUDIO_URL = "gsk.audio_url"
+        const val EXTRA_THUMB_URL = "gsk.thumb_url"
+        const val SEEK_MS = 10_000L
 
         private const val UA =
             "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
@@ -57,7 +61,10 @@ class PlayerService : MediaSessionService() {
         @Volatile var externalNext: (() -> Unit)? = null
         @Volatile var externalPrev: (() -> Unit)? = null
 
-        fun itemFor(title: String, videoUrl: String, audioUrl: String, hasAudio: Boolean): MediaItem {
+        fun itemFor(
+            title: String, videoUrl: String, audioUrl: String, hasAudio: Boolean,
+            thumbUrl: String = "",
+        ): MediaItem {
             val extras = Bundle()
             if (!hasAudio && audioUrl.isNotEmpty()) extras.putString(EXTRA_AUDIO_URL, audioUrl)
             return MediaItem.Builder()
@@ -66,10 +73,28 @@ class PlayerService : MediaSessionService() {
                     MediaMetadata.Builder()
                         .setTitle(title.ifEmpty { "Video" })
                         .setArtist("GSK • Ad-Free 🚫")
+                        .setArtworkUri(
+                            try {
+                                if (thumbUrl.isNotEmpty()) android.net.Uri.parse(thumbUrl) else null
+                            } catch (_: Exception) { null }
+                        )
                         .build()
                 )
                 .setRequestMetadata(
                     MediaItem.RequestMetadata.Builder().setExtras(extras).build()
+                )
+                .build()
+        }
+
+        /** Local downloaded file bhi isi player me chalao (file/content Uri). */
+        fun itemForLocal(title: String, uri: android.net.Uri): MediaItem {
+            return MediaItem.Builder()
+                .setUri(uri)
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle(title.ifEmpty { "Video" })
+                        .setArtist("GSK • Ad-Free 🚫")
+                        .build()
                 )
                 .build()
         }
@@ -169,6 +194,30 @@ class PlayerService : MediaSessionService() {
                 try { externalPrev?.invoke() } catch (_: Exception) {}
                 return START_STICKY
             }
+            ACTION_REWIND -> {
+                // Notification ⏪ 10s — player ke andar wale control jaisa, bina restart.
+                try {
+                    val p = player
+                    if (p != null) {
+                        val np = (p.currentPosition - SEEK_MS).coerceAtLeast(0L)
+                        p.seekTo(np)
+                    }
+                } catch (_: Exception) {}
+                return START_STICKY
+            }
+            ACTION_FF -> {
+                // Notification ⏩ 10s — foreground open kiye bina seek.
+                try {
+                    val p = player
+                    if (p != null) {
+                        val dur = try { p.duration } catch (_: Exception) { C.TIME_UNSET }
+                        var np = p.currentPosition + SEEK_MS
+                        if (dur != C.TIME_UNSET && dur > 0) np = np.coerceAtMost(dur)
+                        p.seekTo(np)
+                    }
+                } catch (_: Exception) {}
+                return START_STICKY
+            }
         }
         return super.onStartCommand(intent, flags, startId)
     }
@@ -195,7 +244,10 @@ class PlayerService : MediaSessionService() {
         super.onDestroy()
     }
 
-    // ---------------- notification (Pause/Next/Prev/Stop) ----------------
+    // ---------------- notification (Prev / -10s / Play / +10s / Next) ----------------
+    // REQUIRED order: ⏮ Prev, ⏪ 10s, ▶/⏸ Play, ⏩ 10s, ⏭ Next.
+    // Stop swipe-away (deleteIntent) se milta rahega — extra action se chhoti
+    // screen par bheed nahi badhate. Lock-screen par artworkUri se thumb.
     private inner class Provider : MediaNotification.Provider {
         override fun createNotification(
             session: MediaSession,
@@ -215,14 +267,15 @@ class PlayerService : MediaSessionService() {
                 .setOngoing(playing)
                 .setOnlyAlertOnce(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .addAction(android.R.drawable.ic_media_previous, "Prev", actionIntent(ACTION_PREV))
+                .addAction(android.R.drawable.ic_media_previous, "Previous", actionIntent(ACTION_PREV))
+                .addAction(android.R.drawable.ic_media_rew, "Back 10s", actionIntent(ACTION_REWIND))
                 .addAction(
                     if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
                     if (playing) "Pause" else "Play",
                     actionIntent(ACTION_TOGGLE),
                 )
+                .addAction(android.R.drawable.ic_media_ff, "Forward 10s", actionIntent(ACTION_FF))
                 .addAction(android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT))
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", actionIntent(ACTION_CLOSE))
             return MediaNotification(NOTIF_ID, nb.build())
         }
 
@@ -285,6 +338,8 @@ class PlayerService : MediaSessionService() {
             ACTION_TOGGLE -> 11
             ACTION_NEXT -> 12
             ACTION_PREV -> 13
+            ACTION_REWIND -> 15
+            ACTION_FF -> 16
             else -> 14
         }
         return PendingIntent.getService(this, rc, i, f)

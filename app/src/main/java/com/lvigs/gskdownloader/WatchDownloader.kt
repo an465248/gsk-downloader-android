@@ -40,6 +40,15 @@ object WatchDownloader {
     private const val UA =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
+    /** YouTube per-connection throttle bypass (yt-dlp bhi yehi lagata hai).
+     *  Iske bina single-connection 30-70KB/s par lock hota hai — Watch-tab
+     *  download slow hone ka root cause yahi tha (Download-tab me pehle se hai). */
+    private fun bypass(url: String): String {
+        if (!url.contains("googlevideo.com")) return url
+        if (url.contains("ratebypass=")) return url
+        return url + (if (url.contains("?")) "&" else "?") + "ratebypass=yes"
+    }
+
     fun isActive(key: String): Boolean = jobs.containsKey(key)
 
     /** Pause <-> Resume toggle. Returns naya paused state (false = job nahi hai). */
@@ -112,7 +121,7 @@ object WatchDownloader {
                     }
                     if (job.cancelled) break
                     val req = Request.Builder()
-                        .url(url)
+                        .url(bypass(url))
                         .header("User-Agent", UA)
                         .header("Accept", "*/*")
                         .header("Accept-Encoding", "identity")

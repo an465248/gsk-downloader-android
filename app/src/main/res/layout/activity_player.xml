@@ -1,438 +1,204 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg"
-    android:fillViewport="true">
-
-<LinearLayout
-    android:id="@+id/playerRoot"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:padding="16dp">
+    android:background="@color/bg">
 
     <LinearLayout
-        android:id="@+id/playerHeader"
+        android:id="@+id/playerRoot"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
-        <Button
-            android:id="@+id/playerBackBtn"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="@drawable/bg_card"
-            android:minWidth="0dp"
-            android:text="◀"
-            android:textColor="@color/txt"
-            android:textSize="18sp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
-            android:text="Ad-Free Player 🚫"
-            android:textColor="@color/txt"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-    </LinearLayout>
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:background="@drawable/bg_card"
-        android:padding="6dp"
-        android:text="🚫 Zero Ads • Direct stream • YouTube ads nahi dikhenge"
-        android:textColor="@color/accent"
-        android:textSize="11sp" />
-
-    <TextView
-        android:id="@+id/playerTitle"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:ellipsize="end"
-        android:maxLines="2"
-        android:text="Link paste karo aur Play dabao"
-        android:textColor="@color/txt"
-        android:textSize="15sp"
-        android:textStyle="bold" />
-
-    <FrameLayout
-        android:id="@+id/playerFrame"
-        android:layout_width="match_parent"
-        android:layout_height="230dp"
-        android:layout_marginTop="8dp"
-        android:background="#000000">
-
-        <androidx.media3.ui.PlayerView
-            android:id="@+id/playerView"
+        <!-- Top bar -->
+        <LinearLayout
+            android:id="@+id/playerHeader"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            app:show_buffering="when_playing"
-            app:use_controller="true" />
-
-        <!-- Double-tap seek flash animation (↶ 10 seconds / ↷ 10 seconds) -->
-        <TextView
-            android:id="@+id/playerSeekFlash"
-            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:background="#CC000000"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
             android:padding="12dp"
-            android:text="↶ 10 seconds"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
-    </FrameLayout>
+            android:background="@color/card">
 
-    <TextView
-        android:id="@+id/playerStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:text="Taiyaar hai."
-        android:textColor="@color/mut"
-        android:textSize="12sp" />
+            <Button
+                android:id="@+id/playerBackBtn"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_card"
+                android:text="◀"
+                android:textColor="@color/txt"
+                android:textSize="14sp" />
 
-    <!-- v3.1 (additive): YouTube-style meta section (desc/channel/pills/comments) -->
-    <include layout="@layout/player_meta" />
+            <TextView
+                android:id="@+id/playerTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="10dp"
+                android:text="Link paste karo aur Play dabao"
+                android:textColor="@color/txt"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:ellipsize="end"
+                android:maxLines="1" />
 
-    <!-- 10-sec + Prev/Next + Replay row (player ke andar wale controls jaisa) -->
-    <LinearLayout
-        android:id="@+id/playerSeekRow"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:gravity="center"
-        android:orientation="horizontal">
+            <Button
+                android:id="@+id/playerSettingsBtn"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_card"
+                android:text="⚙"
+                android:textColor="@color/txt"
+                android:textSize="14sp" />
+            <Button
+                android:id="@+id/playerFsBtn"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_card"
+                android:text="⛶"
+                android:textColor="@color/txt"
+                android:textSize="14sp" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/playerPrevBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:contentDescription="Previous video"
-            android:text="⏮"
-            android:textColor="@color/txt"
-            android:textSize="14sp" />
+        <!-- Player frame -->
+        <FrameLayout
+            android:id="@+id/playerFrame"
+            android:layout_width="match_parent"
+            android:layout_height="230dp"
+            android:background="#000000">
 
-        <Button
-            android:id="@+id/playerBack10Btn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:contentDescription="10 seconds back"
-            android:text="⏪10s"
-            android:textColor="@color/txt"
-            android:textSize="12sp" />
+            <FrameLayout
+                android:id="@+id/overlayHost"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </FrameLayout>
 
-        <Button
-            android:id="@+id/playerReplayBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:contentDescription="Replay from beginning"
-            android:text="↺"
-            android:textColor="@color/txt"
-            android:textSize="14sp" />
-
-        <Button
-            android:id="@+id/playerFwd10Btn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:contentDescription="10 seconds forward"
-            android:text="10s⏩"
-            android:textColor="@color/txt"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/playerNextBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:contentDescription="Next video"
-            android:text="⏭"
-            android:textColor="@color/txt"
-            android:textSize="14sp" />
-    </LinearLayout>
-
-    <!-- Volume + Retry + Settings row -->
-    <LinearLayout
-        android:id="@+id/playerSysRow"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/playerMuteBtn"
-            android:layout_width="48dp"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_card"
-            android:contentDescription="Mute or unmute"
-            android:minWidth="0dp"
-            android:text="🔊"
-            android:textColor="@color/txt"
-            android:textSize="14sp" />
-
-        <SeekBar
-            android:id="@+id/playerVolumeBar"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:contentDescription="Volume" />
-
-        <Button
-            android:id="@+id/playerRetryBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_card"
-            android:contentDescription="Retry loading video"
-            android:minWidth="0dp"
-            android:text="↻ Retry"
-            android:textColor="@color/txt"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/playerSettingsBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_card"
-            android:contentDescription="Player settings"
-            android:minWidth="0dp"
-            android:text="⚙"
-            android:textColor="@color/txt"
-            android:textSize="14sp" />
-    </LinearLayout>
-
-    <!-- Quality pills (play ke dauran bhi — fullscreen me bhi dikhengi) -->
-    <HorizontalScrollView
-        android:id="@+id/playerQPillsScroll"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:scrollbars="none">
-
+        <!-- URL input row -->
         <LinearLayout
-            android:id="@+id/playerQPills"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal" />
-    </HorizontalScrollView>
+            android:orientation="horizontal"
+            android:padding="8dp">
 
-    <LinearLayout
-        android:id="@+id/playerCtrlRow"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:gravity="center"
-        android:orientation="horizontal">
+            <EditText
+                android:id="@+id/playerUrlInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@null"
+                android:hint="YouTube link…"
+                android:textColor="@color/txt"
+                android:textColorHint="#5B6A94"
+                android:textSize="14sp" />
 
-        <Button
-            android:id="@+id/playerSpeedBtn"
-            android:layout_width="0dp"
+            <Button
+                android:id="@+id/playerGoBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_btn"
+                android:text="▶"
+                android:textColor="#04070F"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Meta section (title/channel/pills) -->
+        <include layout="@layout/player_meta" />
+
+        <!-- Quality pills -->
+        <HorizontalScrollView
+            android:id="@+id/playerQPillsScroll"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="6dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:text="1x ⚙"
-            android:textColor="@color/txt"
-            android:textSize="12sp" />
+            android:scrollbars="none">
+            <LinearLayout
+                android:id="@+id/playerQPills"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
 
-        <Button
-            android:id="@+id/playerFsBtn"
-            android:layout_width="0dp"
+        <!-- Download row -->
+        <LinearLayout
+            android:id="@+id/playerDlRow"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="6dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:text="⛶ Fullscreen"
-            android:textColor="@color/txt"
-            android:textSize="12sp" />
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:padding="8dp">
 
-        <Button
-            android:id="@+id/playerZoomBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:text="🔍 Fit"
-            android:textColor="@color/txt"
-            android:textSize="12sp" />
-    </LinearLayout>
+            <Button
+                android:id="@+id/playerDlVideoBtn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/bg_btn"
+                android:text="⬇ Video"
+                android:textColor="#04070F"
+                android:textSize="12sp"
+                android:textStyle="bold" />
 
-    <LinearLayout
-        android:id="@+id/playerDlRow"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:gravity="center"
-        android:orientation="horizontal">
+            <Button
+                android:id="@+id/playerDlAudioBtn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/bg_btn"
+                android:text="🎵 Audio"
+                android:textColor="#04070F"
+                android:textSize="12sp"
+                android:textStyle="bold" />
 
-        <Button
-            android:id="@+id/playerDlVideoBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="6dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_btn"
-            android:text="⬇ Video"
-            android:textColor="#04070F"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            <Button
+                android:id="@+id/playerCancelDl"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_card"
+                android:text="✕"
+                android:textColor="@color/txt"
+                android:visibility="gone" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/playerDlAudioBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="6dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_btn"
-            android:text="🎵 Audio"
-            android:textColor="#04070F"
-            android:textSize="12sp"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/playerCancelDl"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_card"
-            android:text="✕"
-            android:textColor="@color/txt"
-            android:visibility="gone" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:background="@drawable/bg_card"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:padding="8dp">
-
-        <EditText
-            android:id="@+id/playerUrlInput"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="@null"
-            android:hint="YouTube link ya search text..."
-            android:imeOptions="actionGo"
-            android:inputType="text"
-            android:singleLine="true"
-            android:textColor="@color/txt"
-            android:textColorHint="#5B6A94"
-            android:textSize="14sp" />
-
-        <Button
-            android:id="@+id/playerGoBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_btn"
-            android:text="▶ Play"
-            android:textColor="#04070F"
-            android:textStyle="bold" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
+        <!-- Related/UpNext -->
         <TextView
-            android:layout_width="wrap_content"
+            android:id="@+id/playerQueueTitle"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="🕘 "
-            android:textColor="@color/mut"
-            android:textSize="12sp" />
+            android:text="Up Next"
+            android:textColor="@color/txt"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:padding="8dp"
+            android:visibility="gone" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/playerQueueList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="4dp"
+            android:visibility="gone" />
+
+        <!-- Search -->
+        <TextView
+            android:id="@+id/playerSearchTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Search results"
+            android:textColor="@color/txt"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:padding="8dp"
+            android:visibility="gone" />
 
         <LinearLayout
-            android:id="@+id/playerHistRow"
-            android:layout_width="0dp"
+            android:id="@+id/playerSearchList"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="horizontal" />
-
-        <Button
-            android:id="@+id/playerHistClear"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_card"
-            android:minWidth="0dp"
-            android:text="Clear"
-            android:textColor="@color/mut"
-            android:textSize="11sp" />
+            android:orientation="vertical"
+            android:padding="4dp"
+            android:visibility="gone" />
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/playerSearchTitle"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="Search results"
-        android:textColor="@color/txt"
-        android:textSize="13sp"
-        android:textStyle="bold"
-        android:visibility="gone" />
-
-    <LinearLayout
-        android:id="@+id/playerSearchList"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:orientation="vertical" />
-
-    <Button
-        android:id="@+id/playerMoreBtn"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:background="@drawable/bg_card"
-        android:text="▼ Aur results dikhao"
-        android:textColor="@color/accent"
-        android:textSize="12sp"
-        android:visibility="gone" />
-
-    <TextView
-        android:id="@+id/playerQueueTitle"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="Up Next (auto-play)"
-        android:textColor="@color/txt"
-        android:textSize="13sp"
-        android:textStyle="bold"
-        android:visibility="gone" />
-
-    <LinearLayout
-        android:id="@+id/playerQueueList"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:orientation="vertical" />
-</LinearLayout>
-</ScrollView>
+</androidx.constraintlayout.widget.ConstraintLayout>

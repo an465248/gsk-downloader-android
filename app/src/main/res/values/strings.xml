@@ -2,5 +2,18 @@
     <string name="app_name">GSK Downloader</string>
     <string name="tagline">har video, har quality</string>
     <string name="hint_url">Video ka URL paste karo…</string>
-    <string name="footer">© 2026 LVIGS Pvt. Ltd. All rights reserved. • Powered by An Nishad\n🇮🇳 India • English • INR</string>
+    <string name="footer">© 2026 LVIGS Pvt. Ltd. All rights reserved. • NewPipeExtractor direct</string>
+    <string name="player_title">Ad-Free Player</string>
+    <string name="player_subtitle">Zero Ads • Direct stream</string>
+    <string name="play">▶ Play</string>
+    <string name="download_video">⬇ Video</string>
+    <string name="download_audio">🎵 Audio</string>
+    <string name="fullscreen">⛶ Fullscreen</string>
+    <string name="copy_link">Copy Link</string>
+    <string name="link_copied">Link copied</string>
+    <string name="loading">Loading…</string>
+    <string name="ready">Taiyaar hai.</string>
+    <string name="search_results">Search results</string>
+    <string name="up_next">Up Next</string>
+    <string name="subscribe">Subscribe</string>
 </resources>

@@ -918,6 +918,12 @@ class PlayerActivity : AppCompatActivity() {
         override fun onPlayerError(error: PlaybackException) {
             status("Video couldn't be loaded — ↻ Retry dabao. (${error.message?.take(80)})")
         }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            // Bajna shuru = overlay dikhao (pause/quality/fullscreen/seekbar).
+            // Overlay 3s me khud hide hota hai; tap se wapas aata hai.
+            try { if (isPlaying) ytOverlay?.show() } catch (_: Exception) {}
+        }
     }
 
     /** Queue me aage/peeche (notification Next/Prev + buttons sab yahi). */
@@ -2138,8 +2144,11 @@ class PlayerActivity : AppCompatActivity() {
                         return false
                     }
                     override fun onLongPress(e: MotionEvent) {
-                        // Long-press = 2x jab tak ungli rahe (optional speed)
+                        // Long-press = 2x jab tak ungli rahe. Sirf tab jab video
+                        // baj raha ho (pause screen par dabane se 2x atak jata tha).
                         try {
+                            val playing = try { engine?.isPlaying == true } catch (_: Exception) { false }
+                            if (!playing) return
                             if (!longPressSpeed) {
                                 longPressSpeed = true
                                 savedSpeedIdx = speedIdx
@@ -2148,16 +2157,24 @@ class PlayerActivity : AppCompatActivity() {
                             }
                         } catch (_: Exception) {}
                     }
-                    override fun onSingleTapConfirmed(e: MotionEvent): Boolean = false
+                    override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                        // Single tap = YouTube-style overlay show/hide (pause /
+                        // quality-gear / fullscreen / seekbar). Built-in controller
+                        // OFF hai, isliye ye tap warna kuch nahi karta tha.
+                        return try {
+                            ytOverlay?.toggle()
+                            true
+                        } catch (_: Exception) { false }
+                    }
                 })
             playerView.setOnTouchListener { _, ev ->
                 try { scaleDetector?.onTouchEvent(ev) } catch (_: Exception) {}
                 try { gd.onTouchEvent(ev) } catch (_: Exception) {}
                 try {
-                    if (ev.action == MotionEvent.ACTION_UP && longPressSpeed) {
-                        longPressSpeed = false
-                        val s = speeds.getOrNull(savedSpeedIdx) ?: 1f
-                        withEngine { try { it.setPlaybackSpeed(s) } catch (_: Exception) {} }
+                    // UP ke saath CANCEL bhi (ungli slide-off / interrupt) —
+                    // warna 2x speed atak jati thi ("normal nahi ho raha").
+                    if ((ev.action == MotionEvent.ACTION_UP || ev.action == MotionEvent.ACTION_CANCEL) && longPressSpeed) {
+                        endLongPressSpeed()
                     }
                 } catch (_: Exception) {}
                 false // consume mat karo — play/pause/controller chalta rahe
@@ -2166,6 +2183,22 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ---------------- SETTINGS (Playback/Player/Background) ----------------
+    /** Long-press 2x se wapas: speed restore + label sync + confirm.
+     *  Har exit-path (UP/CANCEL) se yahi call hota hai taaki speed kabhi atke nahi. */
+    private fun endLongPressSpeed() {
+        try {
+            longPressSpeed = false
+            val idx = savedSpeedIdx.takeIf { it >= 0 } ?: speedIdx
+            if (idx in speeds.indices) speedIdx = idx
+            val s = speeds.getOrNull(speedIdx) ?: 1f
+            withEngine { try { it.setPlaybackSpeed(s) } catch (_: Exception) {} }
+            try { updateSpeedLabel() } catch (_: Exception) {}
+            try { toast(if (s == 1f) "Speed: normal (1x)" else "Speed: ${s}x") } catch (_: Exception) {}
+        } catch (_: Exception) {
+            try { longPressSpeed = false } catch (_: Exception) {}
+        }
+    }
+
     private fun playerPrefs() = getSharedPreferences("gsk_player_settings", MODE_PRIVATE)
 
     private fun loadPlayerSettings() {

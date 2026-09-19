@@ -99,6 +99,8 @@ class PlayerActivity : AppCompatActivity() {
     private var audioMgr: android.media.AudioManager? = null
     private var lastVol: Int = -1
     private var flashHide: Runnable? = null
+    // YouTube-style overlay (NEW, additive — purane controls untouched).
+    private var ytOverlay: PlayerOverlay? = null
 
     // SINGLE-PLAYER ARCHITECTURE: poori app me playback ka ek hi engine hai —
     // PlayerService ke andar wala ExoPlayer (merge factory + wake-lock + audio
@@ -264,6 +266,10 @@ class PlayerActivity : AppCompatActivity() {
         zoomBtn.setOnClickListener { cycleZoom() }
         setupGestures()
         setupVolumeRow()
+        // NEW (additive): YouTube-style in-video overlay (tap show/hide,
+        // center play/+-10s, seekbar+time, gear=quality sheet, fullscreen).
+        // Purane buttons/gestures untouched rehte hain.
+        try { setupYoutubeOverlay() } catch (_: Exception) {}
         // Android 13+: media notification ke liye permission (MainActivity me
         // bhi hai; Player direct khule to yahan se mango — system dialog only).
         askNotificationPermission()
@@ -480,6 +486,76 @@ class PlayerActivity : AppCompatActivity() {
                 try { startEngineService() } catch (_: Exception) {}
                 try { attachEngine() } catch (_: Exception) {}
             }
+        } catch (_: Exception) {}
+    }
+
+    // ---------------- YOUTUBE-STYLE OVERLAY + QUALITY SHEET (NEW, additive) ----------------
+    // Purana UI/logic untouched — ye sirf nayi layer jodta hai jo SAME single
+    // engine ko chalati hai.
+    private fun setupYoutubeOverlay() {
+        try {
+            // Built-in PlayerView controller hatao taaki YouTube-style overlay
+            // (superset: gear + sleek seekbar + auto-hide) dikhe. Saare purane
+            // custom buttons (prev/10s/next/retry/speed/fs/zoom/pills) vaise hi chalte hain.
+            try { playerView.useController = false } catch (_: Exception) {}
+            try { ytOverlay?.release() } catch (_: Exception) {}
+            ytOverlay = null
+            ytOverlay = PlayerOverlay(
+                this, playerFrame,
+                engineOf = { try { if (engineAttached) engine else null } catch (_: Exception) { null } },
+                controls = PlayerOverlay.Controls(
+                    onTogglePlay = { toggleEnginePlay() },
+                    onSeekBy = { d -> seekBy(d) },
+                    onSeekTo = { pos ->
+                        try { engine?.seekTo(pos) } catch (_: Exception) {}
+                    },
+                    onFullscreen = { toggleFullscreen() },
+                    onQuality = { openQualitySheet() },
+                    seekStepMs = { seekDurMs },
+                ),
+            )
+        } catch (_: Exception) {}
+    }
+
+    private fun toggleEnginePlay() {
+        try {
+            val e = try {
+                if (engineAttached) engine else null
+            } catch (_: Exception) { null } ?: return
+            try {
+                if (e.isPlaying) e.pause() else e.play()
+            } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    /** YouTube-style quality bottom sheet (checkmark + device-capability filter).
+     *  Pick -> wahi existing switchQuality(index) (same engine, position-preserve). */
+    private fun openQualitySheet() {
+        try {
+            if (qOpts.isEmpty()) { toast("Quality load ho rahi — video chalne do."); return }
+            val maxH = try { DeviceCaps.maxVideoHeight() } catch (_: Exception) { 1080 }
+            val list = ArrayList<QualitySheet.Item>()
+            for (i in qOpts.indices) {
+                val label = try { qOpts[i].label } catch (_: Exception) { "" }
+                if (label.isEmpty()) continue
+                val h = label.filter { it.isDigit() }.toIntOrNull() ?: 0
+                val special = label.contains("Auto", true) || label.contains("Audio", true) ||
+                    label.contains("🎵") || label.contains("🔇")
+                // Device se upar ki height hatao (MediaCodec error se bachao).
+                // Bina-audio dash (🔇) bhi list me rakho (last-resort, pehle jaisa).
+                if (!special && h > 0 && h > maxH) continue
+                list.add(QualitySheet.Item(i, label))
+            }
+            if (list.isEmpty()) { toast("Koi quality available nahi."); return }
+            QualitySheet.new(list, qSel) { idx -> selectQualityExternal(idx) }
+                .show(supportFragmentManager, "quality")
+        } catch (_: Exception) {}
+    }
+
+    private fun selectQualityExternal(i: Int) {
+        try {
+            if (i < 0 || i >= qOpts.size) return
+            switchQuality(i)
         } catch (_: Exception) {}
     }
 
@@ -2041,6 +2117,8 @@ class PlayerActivity : AppCompatActivity() {
      *  Baj NA raha ho to service bhi band karo (zombie service nahi).
      *  Engine ko release KABHI mat karo — OWNER service hai. */
     private fun releaseEngine() {
+        try { ytOverlay?.release() } catch (_: Exception) {}
+        ytOverlay = null
         try { engine?.removeListener(engineListener) } catch (_: Exception) {}
         try { playerView.player = null } catch (_: Exception) {}
         engine = null

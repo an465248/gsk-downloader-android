@@ -1130,6 +1130,45 @@ class PlayerActivity : AppCompatActivity() {
             playStream(data.title, data.streamUrl, data.audioUrl, data.hasAudio)
         }
         renderQueue()
+        // NEW (additive): fast-play me related khaali hota hai — video chalne KE
+        // BAAD background me list bharo. Playback/quality ko nahi chhoota.
+        try { maybeFetchRelated() } catch (_: Exception) {}
+    }
+
+    /** Related list background fill (playback chalta rehta hai).
+     *  Stale-guard: beech me agla video lag gaya to purani list mat lagao. */
+    @Volatile private var relatedBusy = false
+
+    private fun maybeFetchRelated() {
+        try {
+            if (!pyReady) return
+            if (queue.isNotEmpty()) return
+            if (relatedBusy) return
+            val page = curPageUrl
+            if (page.isEmpty()) return
+            relatedBusy = true
+            WatchRepository.related(page, cookiePath) { res ->
+                runOnUiThread {
+                    try { relatedBusy = false } catch (_: Exception) {}
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (page != curPageUrl) return@runOnUiThread
+                    if (queue.isNotEmpty()) return@runOnUiThread
+                    res.onSuccess { list ->
+                        if (list.isEmpty()) return@runOnUiThread
+                        if (queue.isNotEmpty()) return@runOnUiThread
+                        if (page != curPageUrl) return@runOnUiThread
+                        queue = listOf(
+                            VideoItem("", curTitle, page, curData?.thumb.orEmpty(), 0),
+                        ) + list
+                        qIndex = 0
+                        renderQueue()
+                        try { status("Related videos mil gaye (${list.size}) — tap karo ▶") } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            try { relatedBusy = false } catch (_: Exception) {}
+        }
     }
 
     // ---------------- QUALITY PILLS (Auto + specific, source ke hisab se) ----------------

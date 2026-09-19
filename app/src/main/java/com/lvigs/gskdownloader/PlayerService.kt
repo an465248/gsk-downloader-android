@@ -72,6 +72,8 @@ class PlayerService : MediaSessionService() {
         @Volatile var playerReady: Boolean = false
         /** Engine taiyaar hote hi (main thread par) bulaya jata hai. */
         @Volatile var onPlayerReady: (() -> Unit)? = null
+        /** MediaSession bridge taiyaar? (false = sirf foreground, card retry me). */
+        @Volatile var sessionReady: Boolean = false
 
         fun itemFor(
             title: String, videoUrl: String, audioUrl: String, hasAudio: Boolean,
@@ -197,16 +199,18 @@ class PlayerService : MediaSessionService() {
             })
             try {
                 session = MediaSession.Builder(this, p).build()
-            } catch (_: Exception) {
-                // Session (bridge) fail -> player phir bhi ZINDA (foreground
-                // playback direct-engine se chalega). Bridge ko thodi der me
-                // dobara banane ki koshish karo — playback kabhi nahi rukegi.
-                session = null
                 try {
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        try { ensureSession() } catch (_: Exception) {}
-                    }, 5000)
+                    sessionReady = session != null
+                    android.util.Log.i("GSK-Media", "session built: $sessionReady")
                 } catch (_: Exception) {}
+            } catch (e: Exception) {
+                // Session (bridge) fail -> player phir bhi ZINDA (foreground
+                // playback direct-engine se chalega). Bridge ko periodic retry
+                // karo — playback kabhi nahi rukegi.
+                try { android.util.Log.e("GSK-Media", "session build failed", e) } catch (_: Exception) {}
+                session = null
+                try { sessionReady = false } catch (_: Exception) {}
+                try { scheduleSessionRetry() } catch (_: Exception) {}
             }
             try { setMediaNotificationProvider(Provider()) } catch (_: Exception) {}
         } catch (_: Exception) {
@@ -220,9 +224,53 @@ class PlayerService : MediaSessionService() {
      *  Main thread par chalao (MediaSession ko Looper chahiye). */
     private fun ensureSession() {
         try {
-            if (session != null) return
+            if (session != null) {
+                try { sessionReady = true } catch (_: Exception) {}
+                return
+            }
             val p = player ?: return
             session = MediaSession.Builder(this, p).build()
+            try {
+                sessionReady = session != null
+                android.util.Log.i("GSK-Media", "session rebuilt: $sessionReady")
+            } catch (_: Exception) {}
+            // Session der se bana ho to notification-manager ko dobara jodo
+            // taaki media card + lock-screen publish ho.
+            try {
+                if (session != null) setMediaNotificationProvider(Provider())
+            } catch (_: Exception) {}
+        } catch (e: Exception) {
+            try { android.util.Log.e("GSK-Media", "session rebuild failed", e) } catch (_: Exception) {}
+        }
+    }
+
+    /** Session null rahe to periodic retry (5s/15s/30s/60s...) jab tak player
+     *  ZINDA hai — max ~12 baar (~3 min). Playback par zero asar. */
+    @Volatile private var sessionRetries: Int = 0
+
+    private fun scheduleSessionRetry() {
+        try {
+            if (session != null || player == null) return
+            if (sessionRetries >= 12) {
+                try { android.util.Log.e("GSK-Media", "session retries exhausted") } catch (_: Exception) {}
+                return
+            }
+            sessionRetries++
+            val delay = when {
+                sessionRetries <= 1 -> 5000L
+                sessionRetries <= 3 -> 15000L
+                else -> 30000L
+            }
+            try {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    try {
+                        if (session == null && player != null) {
+                            ensureSession()
+                            scheduleSessionRetry()
+                        }
+                    } catch (_: Exception) {}
+                }, delay)
+            } catch (_: Exception) {}
         } catch (_: Exception) {}
     }
 
@@ -308,6 +356,8 @@ class PlayerService : MediaSessionService() {
         try { onPlayerReady = null } catch (_: Exception) {}
         try { playerReady = false } catch (_: Exception) {}
         try { playerRef = null } catch (_: Exception) {}
+        try { sessionReady = false } catch (_: Exception) {}
+        try { sessionRetries = 0 } catch (_: Exception) {}
         try { session?.release() } catch (_: Exception) {}
         session = null
         try { player?.release() } catch (_: Exception) {}
@@ -355,7 +405,10 @@ class PlayerService : MediaSessionService() {
                     .addAction(android.R.drawable.ic_media_ff, "Forward 10s", actionIntent(ACTION_FF))
                     .addAction(android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT))
                 return MediaNotification(NOTIF_ID, nb.build())
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // Fallback me bhi controls rakho (Prev/Play/Next) — card bina
+                // controls ke kabhi na dikhe. Har action alag try me.
+                try { android.util.Log.e("GSK-Media", "notification build failed", e) } catch (_: Exception) {}
                 val nb = NotificationCompat.Builder(this@PlayerService, CHANNEL)
                     .setSmallIcon(android.R.drawable.ic_media_play)
                     .setContentTitle("GSK Player")
@@ -363,6 +416,16 @@ class PlayerService : MediaSessionService() {
                     .setContentIntent(contentIntent())
                     .setOngoing(true)
                     .setOnlyAlertOnce(true)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                try {
+                    nb.addAction(android.R.drawable.ic_media_previous, "Previous", actionIntent(ACTION_PREV))
+                } catch (_: Exception) {}
+                try {
+                    nb.addAction(android.R.drawable.ic_media_play, "Play", actionIntent(ACTION_TOGGLE))
+                } catch (_: Exception) {}
+                try {
+                    nb.addAction(android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT))
+                } catch (_: Exception) {}
                 return MediaNotification(NOTIF_ID, nb.build())
             }
         }

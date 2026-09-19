@@ -576,6 +576,47 @@ def search(query, limit=12):
         return json.dumps({"error": friendly(e)}, ensure_ascii=False)
 
 
+def related(url, cookiefile=""):
+    """Watch-tab: video chalne KE BAAD background me Related/Up-Next lao.
+
+    Fast-play path (fast=1) related skip karta hai taaki video turant baje —
+    ye function uske baad halka fetch karke list bharta hai. Hamesha JSON
+    string: {results:[{id,title,url,thumbnail,duration,channel,views}], count}.
+    Fail-soft: khaali list. Playback par zero asar (caller background par chalata hai).
+    """
+    try:
+        return json.dumps(_related(url, cookiefile), ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return json.dumps({"results": [], "count": 0}, ensure_ascii=False)
+
+
+def _related(url, cookiefile=""):
+    try:
+        u = (url or "").strip()
+        if not u:
+            return {"results": [], "count": 0}
+        if _looks_like_playlist(u):
+            try:
+                entries, _t, _c = _flat_playlist_entries(u, cookiefile, 20)
+            except Exception:
+                entries = []
+            entries = entries or []
+            return {"results": entries, "count": len(entries)}
+        vid = ""
+        try:
+            ul = u.lower()
+            if "youtube.com" in ul or "youtu.be" in ul:
+                vid = _parse_youtube_id(u)
+        except Exception:
+            vid = ""
+        if not vid:
+            return {"results": [], "count": 0}
+        out = _youtube_related(vid, 15) or []
+        return {"results": out, "count": len(out)}
+    except Exception:
+        return {"results": [], "count": 0}
+
+
 def _search(query, limit=12):
     q = (query or "").strip()
     if not q:

@@ -80,6 +80,45 @@ object WatchRepository {
         }.start()
     }
 
+    /** Related/Up-Next (video chalne KE BAAD background fill ke liye).
+     *  Fast-play path related skip karta hai — ye halka fetch list bharta hai.
+     *  Playback/loadingBusy ko nahi chhoota; 25s timeout; fail-soft. */
+    fun related(pageUrl: String, cookiePath: String, cb: (Result<List<VideoItem>>) -> Unit) {
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun once(r: Result<List<VideoItem>>) {
+            if (done.compareAndSet(false, true)) {
+                try { cb(r) } catch (_: Exception) {}
+            }
+        }
+        val exec = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val fut: java.util.concurrent.Future<*> = exec.submit {
+            try {
+                val o = JSONObject(
+                    Python.getInstance().getModule("gsk")
+                        .callAttr("related", pageUrl, cookiePath).toString()
+                )
+                if (o.has("error")) {
+                    once(Result.failure(Exception(o.optString("error"))))
+                    return@submit
+                }
+                once(Result.success(parseItems(o.optJSONArray("results"))))
+            } catch (e: Exception) {
+                once(Result.failure(e))
+            } finally {
+                try { exec.shutdown() } catch (_: Exception) {}
+            }
+        }
+        Thread {
+            try {
+                fut.get(25, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (te: java.util.concurrent.TimeoutException) {
+                try { fut.cancel(true) } catch (_: Exception) {}
+                try { exec.shutdownNow() } catch (_: Exception) {}
+                once(Result.failure(Exception("Related list time-out.")))
+            } catch (_: Exception) {}
+        }.start()
+    }
+
     fun extract(pageUrl: String, cookiePath: String, cb: (Result<WatchData>) -> Unit) {
         extractInternal(pageUrl, cookiePath, fast = 1, cb = cb)
     }

@@ -879,27 +879,16 @@ class PlayerActivity : AppCompatActivity() {
                     onWatchData(data, freshQueue) 
                 }
                 .onFailure { e ->
-                    val msg = (e.message ?: "").take(120)
-                    // SERVER-FALLBACK: phone slow/wall ho to server se nikalo
-                    // (admin cookies se IG bhi bina-login). Download phir bhi phone par.
-                    if (getServerBase().isNotEmpty() && myLoad == loadSeq) {
-                        status("Phone se slow — server se try... ")
-                        Thread {
-                            val sd = fetchWatchViaServer(pageUrl)
-                            runOnUiThread {
-                                if (isFinishing || isDestroyed) return@runOnUiThread
-                                if (myLoad != loadSeq) return@runOnUiThread
-                                loadingBusy = false
-                                try { goBtn.isEnabled = true } catch (_: Exception) {}
-                                if (sd != null) onWatchData(sd, freshQueue)
-                                else status("Error: $msg")
-                            }
-                        }.start()
-                    } else {
-                        loadingBusy = false
-                        try { goBtn.isEnabled = true } catch (_: Exception) {}
-                        status("Error: $msg")
+                    val msg = (e.message ?: "").take(200)
+                    // Error category parse karo
+                    val category = when {
+                        msg.startsWith("NETWORK_ERROR:") || msg.startsWith("TEMP_API_ERROR:") -> "RETRY"
+                        msg.startsWith("UNAVAILABLE:") -> "UNAVAILABLE"
+                        msg.startsWith("AUTH_REQUIRED:") -> "AUTH"
+                        msg.startsWith("EXPIRED:") -> "EXPIRED"
+                        else -> "ERROR"
                     }
+                    showErrorState(msg, category, pageUrl)
                 }
             }
         }
@@ -1895,6 +1884,88 @@ class PlayerActivity : AppCompatActivity() {
                 else -> ""
             }
         } catch (_: Exception) { "" }
+    }
+
+    /** Error category ke hisaab se UI state dikhao — NO BLACK SCREEN. */
+    private fun showErrorState(msg: String, category: String, pageUrl: String) {
+        loadingBusy = false
+        try { goBtn.isEnabled = true } catch (_: Exception) {}
+        runOnUiThread {
+            try {
+                val cleanMsg = if (msg.contains(":")) msg.substringAfter(":").trim() else msg
+                when (category) {
+                    "RETRY" -> {
+                        status("🔄 $cleanMsg — Retry dabao")
+                        showErrorOverlay("🔄 Network/API error", cleanMsg, true) { extractAndPlay(pageUrl, false) }
+                    }
+                    "UNAVAILABLE" -> {
+                        status("⛔ $cleanMsg")
+                        showErrorOverlay("⛔ Video unavailable", cleanMsg, false) {}
+                    }
+                    "AUTH" -> {
+                        status("🔐 $cleanMsg")
+                        showErrorOverlay("🔐 Login/Auth required", cleanMsg, false) {}
+                    }
+                    "EXPIRED" -> {
+                        status("⏳ $cleanMsg")
+                        showErrorOverlay("⏳ Link expired", cleanMsg, true) { extractAndPlay(pageUrl, false) }
+                    }
+                    else -> {
+                        status("❌ $cleanMsg")
+                        showErrorOverlay("❌ Error", cleanMsg, true) { extractAndPlay(pageUrl, false) }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** Player area me error overlay dikhao (black screen ke bajay). */
+    private fun showErrorOverlay(title: String, message: String, showRetry: Boolean, onRetry: () -> Unit) {
+        try {
+            // PlayerView ko hide karo, error message dikhao
+            playerView.visibility = View.GONE
+            // playerFrame ke upar TextView overlay banao
+            val overlay = TextView(this).apply {
+                text = "$title\n$message"
+                textSize = 16f
+                gravity = android.view.Gravity.CENTER
+                setTextColor(0xFFFFFFFF.toInt())
+                setBackgroundColor(0xCC000000.toInt())
+                setPadding(24, 24, 24, 24)
+                id = View.generateViewId()
+                tag = "error_overlay"
+            }
+            val params = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            playerFrame.addView(overlay, params)
+
+            if (showRetry) {
+                val retryBtn = Button(this).apply {
+                    text = "🔄 Retry"
+                    setTextColor(0xFFFFFFFF.toInt())
+                    setBackgroundColor(0xFF22D3EE.toInt())
+                    id = View.generateViewId()
+                    tag = "error_overlay"
+                    setOnClickListener {
+                        playerFrame.removeView(overlay)
+                        playerFrame.removeView(this)
+                        playerView.visibility = View.VISIBLE
+                        onRetry()
+                    }
+                }
+                val btnParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { gravity = android.view.Gravity.CENTER }
+                btnParams.setMargins(0, 120, 0, 0)
+                playerFrame.addView(retryBtn, btnParams)
+            }
+        } catch (_: Exception) {
+            // Fallback: status text me dikhao
+            status("$title: $message")
+        }
     }
 
     private fun status(s: String) {

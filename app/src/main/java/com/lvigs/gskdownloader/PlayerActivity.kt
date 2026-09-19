@@ -130,6 +130,14 @@ class PlayerActivity : AppCompatActivity() {
     private var curData: WatchData? = null
     private var curPageUrl: String = ""
     private var curTitle: String = "Video"
+    // 2% / ad-free-stuck FIX: controller na jude to turant local play ke liye
+    // aakhri play-request yaad rakho (watchdog isi se replay karega).
+    // Ye sab user-device par bajta hai (phone CPU/RAM/network) — server sirf
+    // link nikalta hai, stream phone se seedha googlevideo se aata hai.
+    private var lastStream: String = ""
+    private var lastAudio: String = ""
+    private var lastHasAudio: Boolean = false
+    private var lastStartMs: Long = 0L
 
     // search state
     private var lastQuery: String = ""
@@ -397,17 +405,27 @@ class PlayerActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }, ContextCompat.getMainExecutor(this))
             // Watchdog: service-bind atak jaye to local player par shift.
+            // FIX ("Ad-free link nikal rahe hain..." par atka): pehle pendingCtrl
+            // me fasa play-request kabhi bajta hi nahi tha — status wahi atka
+            // rehta tha. Ab useLocal hote hi aakhri request local par replay.
             try {
                 playerRoot.postDelayed({
                     try {
                         if (controller == null && !useLocal && !isFinishing && !isDestroyed) {
                             useLocal = true
                             playerView.player = null
+                            try { pendingCtrl.clear() } catch (_: Exception) {}
                             toast("Service slow hai — phone player se baja rahe...")
                             status("Phone player mode (service nahi juda). Video yahin bajega.")
+                            // Atki play-request ho to turant local bajao (user ka CPU/RAM).
+                            try {
+                                if (lastStream.isNotEmpty()) {
+                                    playLocal(curTitle, lastStream, lastAudio, lastHasAudio, lastStartMs)
+                                }
+                            } catch (_: Exception) {}
                         }
                     } catch (_: Exception) {}
-                }, 10000)
+                }, 8000)
             } catch (_: Exception) {}
         } catch (_: Exception) {}
     }
@@ -415,7 +433,10 @@ class PlayerActivity : AppCompatActivity() {
     private fun withController(fn: (MediaController) -> Unit) {
         try {
             val c = controller
-            if (c != null) fn(c) else pendingCtrl.add(fn)
+            // FIX: service nahi juda (useLocal) to queue me sadne mat do —
+            // caller playStream/playLocalUri pehle hi local baja chuka hai.
+            if (c != null) fn(c)
+            else if (!useLocal) pendingCtrl.add(fn)
         } catch (_: Exception) {}
     }
 
@@ -1252,10 +1273,25 @@ class PlayerActivity : AppCompatActivity() {
                 playerView.resizeMode = zoomModes[zoomIdx]
             } catch (_: Exception) {}
             titleText.text = title
+            // Watchdog-replay ke liye yaad rakho (service-bind fail par local replay).
+            try {
+                lastStream = streamUrl; lastAudio = audioUrl
+                lastHasAudio = hasAudio; lastStartMs = startAtMs
+            } catch (_: Exception) {}
             // useLocal (service fail-safe) ho to phone ke andar bajao,
             // warna background service me (notification ke saath).
             if (useLocal) {
                 playLocal(title, streamUrl, audioUrl, hasAudio, startAtMs)
+                return
+            }
+            // FIX ("sirf show hota, play nahi hota"): controller abhi null ho
+            // (service bind me 2-8s lagta hai) to queue me sadne mat do —
+            // turant phone-player se bajao (user CPU/RAM/network, zero wait).
+            // Service jud jaye to agla video/quality service se bajega,
+            // ye wala local chalta rahega (double-audio nahi, rukega nahi).
+            if (controller == null) {
+                playLocal(title, streamUrl, audioUrl, hasAudio, startAtMs)
+                status("🚫 Ad-Free chal raha hai... (phone player, instant)")
                 return
             }
             // Service ka player use hota hai (background + notification ke liye).
@@ -1271,6 +1307,8 @@ class PlayerActivity : AppCompatActivity() {
                     applyKeepScreenOn()
                     status("🚫 Ad-Free chal raha hai... (Back = background play, notification se ⏮ ⏪ ⏯ ⏩ ⏭)")
                 } catch (e: Exception) {
+                    // Service-item fail (403/IP-mismatch) to local fallback — ruke nahi.
+                    try { playLocal(title, streamUrl, audioUrl, hasAudio, startAtMs) } catch (_: Exception) {}
                     status("Video couldn't be loaded — ↻ Retry dabao. (${e.message?.take(80)})")
                 }
             }
@@ -1283,6 +1321,22 @@ class PlayerActivity : AppCompatActivity() {
     private fun playLocalUri(title: String, uri: android.net.Uri) {
         try {
             titleText.text = title
+            // FIX: controller null ho to queue me mat sado — local hi bajao.
+            if (controller == null || useLocal) {
+                try {
+                    try { localPlayer?.stop() } catch (_: Exception) {}
+                    try { localPlayer?.release() } catch (_: Exception) {}
+                    localPlayer = null
+                    val p = ExoPlayer.Builder(this).build()
+                    localPlayer = p
+                    playerView.player = p
+                    p.setMediaItem(androidx.media3.common.MediaItem.fromUri(uri))
+                    p.prepare()
+                    p.playWhenReady = true
+                    status("📁 Local file chal rahi — ad-free (phone player).")
+                    return
+                } catch (_: Exception) {}
+            }
             if (useLocal && localPlayer != null) {
                 try {
                     localPlayer?.setMediaItem(androidx.media3.common.MediaItem.fromUri(uri))
